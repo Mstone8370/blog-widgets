@@ -480,6 +480,18 @@
 
   window.addEventListener('resize', draw);
   draw();
+
+  // === Report height to parent window (for iframe auto-resize) ===
+  function reportHeight() {
+    if (window.parent === window) return;
+    const h = document.documentElement.scrollHeight;
+    window.parent.postMessage({ type: 'widget-height', height: h }, '*');
+  }
+  window.addEventListener('load', reportHeight);
+  window.addEventListener('resize', reportHeight);
+  if (window.ResizeObserver) {
+    new ResizeObserver(reportHeight).observe(document.body);
+  }
 })();
 </script>
 
