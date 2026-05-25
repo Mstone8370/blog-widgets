@@ -21,4 +21,4 @@
   document.head.appendChild(script);
 })();
 
-// <script src="https://mstone8370.github.io/blog-widgets/load-mathjax.js"></script>
+// <script src="https://mstone8370.github.io/blog-widgets/Script/LoadMathJax.js"></script>
