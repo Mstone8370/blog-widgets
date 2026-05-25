@@ -66,6 +66,7 @@
     border-radius: 2px;
     outline: none;
     margin: 0;
+    touch-action: pan-y;
   }
   .ggx-vis input[type=range]::-webkit-slider-thumb,
   .ggx-vis input[type=range]::-moz-range-thumb {
@@ -77,6 +78,7 @@
     cursor: pointer;
     border: 2px solid #fff;
     box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    touch-action: none;
   }
 </style>
 </head>
@@ -197,51 +199,78 @@
     }
   }
 
-  function drawNormalArrow() {
-    const base = project(0, 0, 0);
-    const tip = project(0, 1.25, 0);
-    ctx.strokeStyle = ACCENT;
-    ctx.fillStyle = ACCENT;
-    ctx.lineWidth = 1.8;
+  function drawSamplesWithNormal() {
+    const items = [];
 
-    ctx.beginPath();
-    ctx.moveTo(base.sx, base.sy);
-    ctx.lineTo(tip.sx, tip.sy);
-    ctx.stroke();
+    // Sample points
+    const samples = ggxSamples(roughness, numSamples);
+    for (const s of samples) {
+      const p = project(s.x, s.y, s.z);
+      items.push({ type: 'point', depth: p.depth, sx: p.sx, sy: p.sy, cosT: s.cosT });
+    }
 
-    const dx = tip.sx - base.sx, dy = tip.sy - base.sy;
-    const len = Math.hypot(dx, dy);
-    const ux = dx / len, uy = dy / len;
-    const s = 6;
-    ctx.beginPath();
-    ctx.moveTo(tip.sx, tip.sy);
-    ctx.lineTo(tip.sx - ux*s - uy*s*0.5, tip.sy - uy*s + ux*s*0.5);
-    ctx.lineTo(tip.sx - ux*s + uy*s*0.5, tip.sy - uy*s - ux*s*0.5);
-    ctx.closePath();
-    ctx.fill();
+    // Normal arrow shaft: split into segments
+    const N_SEGMENTS = 24;
+    const SHAFT_LEN = 1.25;
+    for (let i = 0; i < N_SEGMENTS; i++) {
+      const y0 = (i / N_SEGMENTS) * SHAFT_LEN;
+      const y1 = ((i + 1) / N_SEGMENTS) * SHAFT_LEN;
+      const p0 = project(0, y0, 0);
+      const p1 = project(0, y1, 0);
+      const depth = (p0.depth + p1.depth) * 0.5;
+      items.push({ type: 'shaft', depth, x0: p0.sx, y0: p0.sy, x1: p1.sx, y1: p1.sy });
+    }
 
+    // Arrowhead at tip
+    const tip = project(0, SHAFT_LEN, 0);
+    const justBelowTip = project(0, SHAFT_LEN - 0.05, 0);
+    items.push({ type: 'arrowhead', depth: tip.depth, tip, prev: justBelowTip });
+
+    // 'n' label
     const lbl = project(0, 1.35, 0);
-    ctx.font = '600 14px SUIT, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('n', lbl.sx, lbl.sy);
-  }
+    items.push({ type: 'label', depth: lbl.depth, sx: lbl.sx, sy: lbl.sy });
 
-  function drawSamples() {
-    const projected = ggxSamples(roughness, numSamples)
-      .map(s => ({ ...project(s.x, s.y, s.z), cosT: s.cosT }))
-      .sort((a, b) => a.depth - b.depth);
+    // Sort all by depth (back to front)
+    items.sort((a, b) => a.depth - b.depth);
 
-    for (const p of projected) {
-      const t = p.cosT;
-      const r = Math.round(30 + t * 200);
-      const g = Math.round(80 + t * 80);
-      const b = Math.round(190 - t * 140);
-      const alpha = Math.min(0.85, 0.4 + (p.depth + 1) * 0.3);
-      ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
-      ctx.beginPath();
-      ctx.arc(p.sx, p.sy, 2.2, 0, PI2);
-      ctx.fill();
+    for (const it of items) {
+      if (it.type === 'point') {
+        const t = it.cosT;
+        const r = Math.round(30 + t * 200);
+        const g = Math.round(80 + t * 80);
+        const b = Math.round(190 - t * 140);
+        const alpha = Math.min(0.85, 0.4 + (it.depth + 1) * 0.3);
+        ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+        ctx.beginPath();
+        ctx.arc(it.sx, it.sy, 2.2, 0, PI2);
+        ctx.fill();
+      } else if (it.type === 'shaft') {
+        ctx.strokeStyle = ACCENT;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(it.x0, it.y0);
+        ctx.lineTo(it.x1, it.y1);
+        ctx.stroke();
+      } else if (it.type === 'arrowhead') {
+        const dx = it.tip.sx - it.prev.sx, dy = it.tip.sy - it.prev.sy;
+        const len = Math.hypot(dx, dy);
+        if (len < 0.5) continue;
+        const ux = dx / len, uy = dy / len;
+        const s = 6;
+        ctx.fillStyle = ACCENT;
+        ctx.beginPath();
+        ctx.moveTo(it.tip.sx, it.tip.sy);
+        ctx.lineTo(it.tip.sx - ux*s - uy*s*0.5, it.tip.sy - uy*s + ux*s*0.5);
+        ctx.lineTo(it.tip.sx - ux*s + uy*s*0.5, it.tip.sy - uy*s - ux*s*0.5);
+        ctx.closePath();
+        ctx.fill();
+      } else if (it.type === 'label') {
+        ctx.fillStyle = ACCENT;
+        ctx.font = '600 14px SUIT, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('n', it.sx, it.sy);
+      }
     }
   }
 
@@ -258,8 +287,7 @@
     ctx.clearRect(0, 0, projW, projH);
 
     drawHemisphereFrame();
-    drawNormalArrow();
-    drawSamples();
+    drawSamplesWithNormal();
   }
 
   rSlider.addEventListener('input', () => {
