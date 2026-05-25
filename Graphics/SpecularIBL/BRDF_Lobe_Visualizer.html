@@ -487,7 +487,7 @@
     // Measure the actual content wrapper height, not the iframe viewport
     const wrapper = document.querySelector('.brdf-vis');
     const h = wrapper ? wrapper.getBoundingClientRect().height : document.documentElement.scrollHeight;
-    window.parent.postMessage({ type: 'widget-height', height: Math.ceil(h) }, '*');
+    window.parent.postMessage({ type: 'widget-height', height: Math.ceil(h) + 2 }, '*');
   }
   window.addEventListener('load', reportHeight);
   window.addEventListener('resize', reportHeight);

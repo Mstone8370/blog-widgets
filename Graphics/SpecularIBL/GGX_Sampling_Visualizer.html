@@ -289,6 +289,19 @@
 
   window.addEventListener('resize', draw);
   draw();
+
+  // === Report height to parent window (for iframe auto-resize) ===
+  function reportHeight() {
+    if (window.parent === window) return;
+    const wrapper = document.querySelector('.ggx-vis');
+    const h = wrapper ? wrapper.getBoundingClientRect().height : document.documentElement.scrollHeight;
+    window.parent.postMessage({ type: 'widget-height', height: Math.ceil(h) + 2 }, '*');
+  }
+  window.addEventListener('load', reportHeight);
+  window.addEventListener('resize', reportHeight);
+  if (window.ResizeObserver) {
+    new ResizeObserver(reportHeight).observe(document.body);
+  }
 })();
 </script>
 
