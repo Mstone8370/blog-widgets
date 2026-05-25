@@ -61,6 +61,8 @@
     flex-shrink: 0;
     font-variant-numeric: tabular-nums;
   }
+  .mc-vis .pi-red { color: #d8334a; font-weight: 600; }
+  .mc-vis .pi-result { color: #2a9d4a; font-weight: 700; font-size: 18px; }
   .mc-vis .controls {
     padding: 4px;
     display: grid;
@@ -86,6 +88,7 @@
     border-radius: 2px;
     outline: none;
     margin: 0;
+    touch-action: pan-y;
   }
   .mc-vis input[type=range]::-webkit-slider-thumb,
   .mc-vis input[type=range]::-moz-range-thumb {
@@ -97,6 +100,7 @@
     cursor: pointer;
     border: 2px solid #fff;
     box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    touch-action: none;
   }
 </style>
 </head>
@@ -258,12 +262,13 @@
 
   function updateFormula(red, total) {
     if (total === 0) {
-      formulaEl.innerHTML = 'π ≈ 4 × 0 / 0 = —';
+      formulaEl.innerHTML = 'π ≈ 4 × 0 / 0 = <span class="pi-result">—</span>';
       return;
     }
     const pi = 4 * red / total;
     formulaEl.innerHTML =
-      'π ≈ 4 × ' + red + ' / ' + total + ' = ' + pi.toFixed(4);
+      'π ≈ 4 × <span class="pi-red">' + red + '</span> / ' + total +
+      ' = <span class="pi-result">' + pi.toFixed(4) + '</span>';
   }
 
   function draw() {
