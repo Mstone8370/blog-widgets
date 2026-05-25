@@ -8,7 +8,7 @@
       processEscapes: true
     },
     chtml: {
-        displayOverflow: 'scale'
+        displayOverflow: 'scroll'
     },
     options: {
       skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
