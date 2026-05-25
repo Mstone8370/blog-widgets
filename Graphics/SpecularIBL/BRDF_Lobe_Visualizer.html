@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  .brdf-vis {
+    font-family: 'SUIT', sans-serif;
+    max-width: 580px;
+    margin: 0 auto;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+  }
+  .brdf-vis canvas {
+    display: block;
+    width: 100%;
+    cursor: grab;
+    background: #fdfdfd;
+    touch-action: none;
+  }
+  .brdf-vis canvas:active { cursor: grabbing; }
+  .brdf-vis .controls {
+    margin-top: 10px;
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 130px 1fr 56px;
+    align-items: center;
+    gap: 12px 12px;
+  }
+  .brdf-vis .label { font-size: 13px; color: #444; }
+  .brdf-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .brdf-vis input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 3px;
+    background: #d4d4d8;
+    border-radius: 2px;
+    outline: none;
+    margin: 0;
+  }
+  .brdf-vis input[type=range]::-webkit-slider-thumb,
+  .brdf-vis input[type=range]::-moz-range-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #2052BB;
+    cursor: pointer;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  }
+</style>
+</head>
+<body>
+
+<div class="brdf-vis">
+  <canvas id="brdfCanvas"></canvas>
+  <div class="controls">
+    <div class="label">Roughness</div>
+    <input type="range" id="rSlider" min="5" max="100" value="60">
+    <div class="value" id="rVal">0.60</div>
+
+    <div class="label">View θ</div>
+    <input type="range" id="tSlider" min="0" max="85" value="70">
+    <div class="value" id="tVal">70°</div>
+
+    <div class="label">Lobe 크기 정규화</div>
+    <div style="display: flex; align-items: center;">
+      <input type="checkbox" id="normCheckbox" checked style="cursor: pointer;">
+    </div>
+    <div></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  // === Constants ===
+  const ACCENT_N = '#2052BB';
+  const ACCENT_V = '#22a';
+  const PLANE = '#e8e8e8';
+  const PI = Math.PI;
+  const PI2 = PI * 2;
+  const THETA_STEPS = 28;
+  const PHI_STEPS = 56;
+  const TS1 = THETA_STEPS + 1;
+  const PS1 = PHI_STEPS + 1;
+  const VERT_COUNT = TS1 * PS1;
+  const QUAD_COUNT = THETA_STEPS * PHI_STEPS;
+  const LOOK_AT_Y = 0.4;
+
+  // Pre-compute sin/cos tables
+  const sinTheta = new Float32Array(TS1);
+  const cosTheta = new Float32Array(TS1);
+  const sinPhi = new Float32Array(PS1);
+  const cosPhi = new Float32Array(PS1);
+  for (let i = 0; i < TS1; i++) {
+    const t = (i / THETA_STEPS) * (PI / 2);
+    sinTheta[i] = Math.sin(t);
+    cosTheta[i] = Math.cos(t);
+  }
+  for (let j = 0; j < PS1; j++) {
+    const p = (j / PHI_STEPS) * PI2;
+    sinPhi[j] = Math.sin(p);
+    cosPhi[j] = Math.cos(p);
+  }
+
+  // === DOM ===
+  const canvas = document.getElementById('brdfCanvas');
+  const ctx = canvas.getContext('2d');
+  const rSlider = document.getElementById('rSlider');
+  const tSlider = document.getElementById('tSlider');
+  const rValEl = document.getElementById('rVal');
+  const tValEl = document.getElementById('tVal');
+
+  // === State ===
+  let roughness = 0.6;
+  let viewTheta = 70 * PI / 180;
+  let orbitTheta = 130 * PI / 180;
+  let orbitPhi = 20 * PI / 180;
+  let normalize = true;
+  // Fixed scale (used when not normalizing). Calibrated for the initial view
+  // so the lobe at roughness=0.6, viewTheta=0 is around 0.9 of unit.
+  let fixedScale = 0;
+
+  // === Cached lobe geometry (world space) - recomputed only on roughness/viewTheta change ===
+  const lobeX = new Float32Array(VERT_COUNT);
+  const lobeY = new Float32Array(VERT_COUNT);
+  const lobeZ = new Float32Array(VERT_COUNT);
+  const lobeIntensity = new Float32Array(VERT_COUNT);
+  let lobeDirty = true;
+
+  // === Projected vertex buffers ===
+  const projSX = new Float32Array(VERT_COUNT);
+  const projSY = new Float32Array(VERT_COUNT);
+  const projDepth = new Float32Array(VERT_COUNT);
+
+  // === Quad rendering arrays ===
+  const quadOrder = new Int32Array(QUAD_COUNT);
+  const quadDepth = new Float32Array(QUAD_COUNT);
+  // Pre-formatted color strings (cache to avoid repeated string concatenation)
+  const quadColor = new Array(QUAD_COUNT);
+
+  function buildLobe() {
+    const vx = Math.sin(viewTheta), vy = Math.cos(viewTheta);
+    const a = roughness * roughness;
+    const a2 = a * a;
+    const NoV = vy;
+    const invPI = 1 / PI;
+
+    // First pass: compute BRDF values into lobeIntensity buffer, find max
+    let maxVal = 0;
+
+    for (let i = 0; i < TS1; i++) {
+      const sT = sinTheta[i], cT = cosTheta[i];
+      const NoL = cT;
+      const rowOff = i * PS1;
+
+      if (NoL <= 0 || NoV <= 0) {
+        for (let j = 0; j < PS1; j++) lobeIntensity[rowOff + j] = 0;
+        continue;
+      }
+
+      // V function denominator parts (constant per theta row)
+      const visV = NoL * Math.sqrt(NoV * (NoV - NoV * a2) + a2);
+      const visL = NoV * Math.sqrt(NoL * (NoL - NoL * a2) + a2);
+      const Vfunc = 0.5 / (visV + visL);
+
+      for (let j = 0; j < PS1; j++) {
+        const lx = sT * cosPhi[j];
+        const lz = sT * sinPhi[j];
+
+        // Half vector (vz = 0)
+        let hx = lx + vx;
+        let hy = NoL + vy;
+        let hz = lz;
+        const hLenSq = hx*hx + hy*hy + hz*hz;
+        if (hLenSq < 1e-12) { lobeIntensity[rowOff + j] = 0; continue; }
+        const invH = 1 / Math.sqrt(hLenSq);
+        hx *= invH; hy *= invH; hz *= invH;
+
+        const NoH = hy;
+        const VoH = vx*hx + vy*hy; // vz=0
+        if (NoH <= 0 || VoH <= 0) { lobeIntensity[rowOff + j] = 0; continue; }
+
+        // GGX D
+        const d = NoH * NoH * (a2 - 1) + 1;
+        const D = a2 * invPI / (d * d);
+
+        const val = D * Vfunc * NoL;
+        lobeIntensity[rowOff + j] = val;
+        if (val > maxVal) maxVal = val;
+      }
+    }
+
+    if (maxVal < 1e-6) {
+      for (let i = 0; i < VERT_COUNT; i++) {
+        lobeX[i] = lobeY[i] = lobeZ[i] = 0;
+        lobeIntensity[i] = 0;
+      }
+      return;
+    }
+
+    // Initialize fixed scale on first run (calibrated to roughness=0.6, viewTheta=0)
+    if (fixedScale === 0) {
+      // Roughly: peak D at NoH=1 with a=0.36, a2=0.1296 -> D ~= 1/(pi*a2*a2) * a2 = 1/(pi*a2)
+      // V at NoV=NoL=1 -> 0.5 / (sqrt(1-a2+a2) + sqrt(...)) = 0.25
+      // So BRDF*NoL peak ~= D * V * NoL ~= 1/(pi*0.1296) * 0.25 * 1 ~= 0.61
+      // Use a tunable constant
+      fixedScale = 0.9 / 0.61;
+    }
+
+    const scale = normalize ? (0.9 / maxVal) : fixedScale;
+    const invMax = 1 / maxVal;
+
+    // Second pass: convert values to positions and normalize intensity
+    for (let i = 0; i < TS1; i++) {
+      const sT = sinTheta[i], cT = cosTheta[i];
+      const rowOff = i * PS1;
+      for (let j = 0; j < PS1; j++) {
+        const idx = rowOff + j;
+        const val = lobeIntensity[idx];
+        const r = val * scale;
+        lobeX[idx] = sT * cosPhi[j] * r;
+        lobeY[idx] = cT * r;
+        lobeZ[idx] = sT * sinPhi[j] * r;
+        lobeIntensity[idx] = val * invMax;
+      }
+    }
+  }
+
+  // === Camera basis (computed once per draw) ===
+  let cam_ct, cam_st, cam_cp, cam_sp;
+  let projW, projH, projR;
+  function updateCamera() {
+    cam_cp = Math.cos(orbitPhi);
+    cam_sp = Math.sin(orbitPhi);
+    cam_ct = Math.cos(orbitTheta);
+    cam_st = Math.sin(orbitTheta);
+  }
+  function projP(x, y, z) {
+    const yOff = y - LOOK_AT_Y;
+    const x1 = x * cam_ct + z * cam_st;
+    const z1 = -x * cam_st + z * cam_ct;
+    return {
+      sx: projW / 2 + x1 * projR,
+      sy: projH / 2 - (yOff * cam_cp - z1 * cam_sp) * projR,
+      depth: yOff * cam_sp + z1 * cam_cp,
+    };
+  }
+  function projectLobeBatch() {
+    const halfW = projW / 2, halfH = projH / 2;
+    for (let i = 0; i < VERT_COUNT; i++) {
+      const x = lobeX[i], y = lobeY[i], z = lobeZ[i];
+      const yOff = y - LOOK_AT_Y;
+      const x1 = x * cam_ct + z * cam_st;
+      const z1 = -x * cam_st + z * cam_ct;
+      projSX[i] = halfW + x1 * projR;
+      projSY[i] = halfH - (yOff * cam_cp - z1 * cam_sp) * projR;
+      projDepth[i] = yOff * cam_sp + z1 * cam_cp;
+    }
+  }
+
+  // === Prepare quads: compute depth, color, indices for sorting ===
+  function prepareQuads() {
+    for (let i = 0; i < THETA_STEPS; i++) {
+      const rowOff = i * PHI_STEPS;
+      const vRow = i * PS1;
+      const vRowNext = vRow + PS1;
+      for (let j = 0; j < PHI_STEPS; j++) {
+        const qi = rowOff + j;
+        const v00 = vRow + j;
+        const v01 = v00 + 1;
+        const v10 = vRowNext + j;
+        const v11 = v10 + 1;
+
+        quadDepth[qi] = (projDepth[v00] + projDepth[v01] + projDepth[v10] + projDepth[v11]) * 0.25;
+        const t = (lobeIntensity[v00] + lobeIntensity[v01] + lobeIntensity[v10] + lobeIntensity[v11]) * 0.25;
+        const r = 100 + ((t * 155) | 0);
+        const g = 20 + ((t * 40) | 0);
+        const b = 20 + ((t * 40) | 0);
+        quadColor[qi] = 'rgb(' + r + ',' + g + ',' + b + ')';
+        quadOrder[qi] = qi;
+      }
+    }
+
+    // Indirect sort by depth (back to front)
+    // Convert to regular array for sort, then write back
+    const idx = Array.from(quadOrder);
+    idx.sort((a, b) => quadDepth[a] - quadDepth[b]);
+    for (let i = 0; i < QUAD_COUNT; i++) quadOrder[i] = idx[i];
+  }
+
+  function drawLobe() {
+    let lastColor = '';
+    for (let k = 0; k < QUAD_COUNT; k++) {
+      const qi = quadOrder[k];
+      const i = (qi / PHI_STEPS) | 0;
+      const j = qi - i * PHI_STEPS;
+      const v00 = i * PS1 + j;
+      const v01 = v00 + 1;
+      const v10 = v00 + PS1;
+      const v11 = v10 + 1;
+
+      const color = quadColor[qi];
+      if (color !== lastColor) {
+        ctx.fillStyle = color;
+        ctx.strokeStyle = color;
+        lastColor = color;
+      }
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(projSX[v00], projSY[v00]);
+      ctx.lineTo(projSX[v01], projSY[v01]);
+      ctx.lineTo(projSX[v11], projSY[v11]);
+      ctx.lineTo(projSX[v10], projSY[v10]);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+
+  function drawPlane() {
+    const c = projP(0, 0, 0);
+    const e1 = projP(1, 0, 0);
+    const e2 = projP(0, 0, 1);
+    const ax = e1.sx - c.sx, ay = e1.sy - c.sy;
+    const bx = e2.sx - c.sx, by = e2.sy - c.sy;
+
+    ctx.save();
+    ctx.translate(c.sx, c.sy);
+    ctx.transform(ax / projR, ay / projR, bx / projR, by / projR, 0, 0);
+    ctx.beginPath();
+    ctx.arc(0, 0, projR, 0, PI2);
+    ctx.restore();
+    ctx.fillStyle = PLANE;
+    ctx.fill();
+    ctx.strokeStyle = '#bbb';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+  }
+
+  function drawArrow(from, to, color) {
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(from.sx, from.sy);
+    ctx.lineTo(to.sx, to.sy);
+    ctx.stroke();
+
+    const dx = to.sx - from.sx, dy = to.sy - from.sy;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return;
+    const ux = dx / len, uy = dy / len;
+    const s = 6;
+    ctx.beginPath();
+    ctx.moveTo(to.sx, to.sy);
+    ctx.lineTo(to.sx - ux*s - uy*s*0.5, to.sy - uy*s + ux*s*0.5);
+    ctx.lineTo(to.sx - ux*s + uy*s*0.5, to.sy - uy*s - ux*s*0.5);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawLabel(p, text, color) {
+    ctx.fillStyle = color;
+    ctx.fillText(text, p.sx, p.sy);
+  }
+
+  function drawVectors() {
+    ctx.font = '600 14px SUIT, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const origin = projP(0, 0, 0);
+    drawArrow(origin, projP(0, 1.0, 0), ACCENT_N);
+    drawLabel(projP(0, 1.15, 0), 'n', ACCENT_N);
+
+    const vx = Math.sin(viewTheta), vy = Math.cos(viewTheta);
+
+    // Dashed projection on the ground plane (v projected onto y=0 plane)
+    if (viewTheta > 0.01) {
+      const vTip = projP(vx, vy, 0);
+      const vGround = projP(vx, 0, 0);
+      ctx.save();
+      ctx.strokeStyle = ACCENT_V;
+      ctx.lineWidth = 1.0;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(vTip.sx, vTip.sy);
+      ctx.lineTo(vGround.sx, vGround.sy);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(origin.sx, origin.sy);
+      ctx.lineTo(vGround.sx, vGround.sy);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    drawArrow(origin, projP(vx, vy, 0), ACCENT_V);
+    drawLabel(projP(vx * 1.15, vy * 1.15, 0), 'v', ACCENT_V);
+  }
+
+  // (cross-section drawing removed)
+
+  function draw() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    projW = canvas.clientWidth;
+    projH = Math.round(projW * 0.85);
+    projR = Math.min(projW, projH) * 0.5;
+
+    canvas.width = projW * dpr;
+    canvas.height = projH * dpr;
+    canvas.style.height = projH + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, projW, projH);
+
+    if (lobeDirty) {
+      buildLobe();
+      lobeDirty = false;
+    }
+    updateCamera();
+    projectLobeBatch();
+    prepareQuads();
+
+    drawPlane();
+    drawLobe();
+    drawVectors();
+  }
+
+  // === Input ===
+  rSlider.addEventListener('input', () => {
+    roughness = +rSlider.value / 100;
+    rValEl.textContent = roughness.toFixed(2);
+    lobeDirty = true;
+    draw();
+  });
+  tSlider.addEventListener('input', () => {
+    viewTheta = +tSlider.value * PI / 180;
+    tValEl.textContent = tSlider.value + '°';
+    lobeDirty = true;
+    draw();
+  });
+
+  const normCheckbox = document.getElementById('normCheckbox');
+  normCheckbox.addEventListener('change', () => {
+    normalize = normCheckbox.checked;
+    lobeDirty = true;
+    draw();
+  });
+
+  // Orbit drag (does not rebuild lobe geometry)
+  let dragging = false, prevX = 0, prevY = 0;
+  canvas.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    prevX = e.clientX; prevY = e.clientY;
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    orbitTheta += (e.clientX - prevX) * 0.008;
+    orbitPhi = Math.max(0.05, Math.min(PI / 2 - 0.05, orbitPhi + (e.clientY - prevY) * 0.008));
+    prevX = e.clientX; prevY = e.clientY;
+    draw();
+  });
+  const endDrag = () => { dragging = false; };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointerleave', endDrag);
+
+  window.addEventListener('resize', draw);
+  draw();
+})();
+</script>
+
+</body>
+</html>
