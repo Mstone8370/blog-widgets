@@ -484,8 +484,10 @@
   // === Report height to parent window (for iframe auto-resize) ===
   function reportHeight() {
     if (window.parent === window) return;
-    const h = document.documentElement.scrollHeight;
-    window.parent.postMessage({ type: 'widget-height', height: h }, '*');
+    // Measure the actual content wrapper height, not the iframe viewport
+    const wrapper = document.querySelector('.brdf-vis');
+    const h = wrapper ? wrapper.getBoundingClientRect().height : document.documentElement.scrollHeight;
+    window.parent.postMessage({ type: 'widget-height', height: Math.ceil(h) }, '*');
   }
   window.addEventListener('load', reportHeight);
   window.addEventListener('resize', reportHeight);
