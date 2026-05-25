@@ -7,6 +7,9 @@
       displayMath: [['$$', '$$'], ['\\[', '\\]']],
       processEscapes: true
     },
+    chtml: {
+        displayOverflow: 'scroll'
+    },
     options: {
       skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
     }
