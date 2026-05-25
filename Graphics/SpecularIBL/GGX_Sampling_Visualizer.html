@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  .ggx-vis {
+    font-family: 'SUIT', sans-serif;
+    max-width: 580px;
+    margin: 0 auto;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+  }
+  .ggx-vis canvas {
+    display: block;
+    width: 100%;
+    cursor: grab;
+    background: #fdfdfd;
+    touch-action: none;
+  }
+  .ggx-vis canvas:active { cursor: grabbing; }
+  .ggx-vis .controls {
+    margin-top: 10px;
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 88px 1fr 56px;
+    align-items: center;
+    gap: 12px 12px;
+  }
+  .ggx-vis .label { font-size: 13px; color: #444; }
+  .ggx-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .ggx-vis input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 3px;
+    background: #d4d4d8;
+    border-radius: 2px;
+    outline: none;
+    margin: 0;
+  }
+  .ggx-vis input[type=range]::-webkit-slider-thumb,
+  .ggx-vis input[type=range]::-moz-range-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #2052BB;
+    cursor: pointer;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  }
+</style>
+</head>
+<body>
+
+<div class="ggx-vis">
+  <canvas id="ggxCanvas"></canvas>
+  <div class="controls">
+    <div class="label">Roughness</div>
+    <input type="range" id="rSlider" min="2" max="100" value="50">
+    <div class="value" id="rVal">0.50</div>
+
+    <div class="label">Samples</div>
+    <input type="range" id="sSlider" min="0" max="12" step="0.1" value="9">
+    <div class="value" id="sVal">512</div>
+  </div>
+</div>
+
+<script>
+(function() {
+  // === Constants ===
+  const ACCENT = '#2052BB';
+  const GRID  = '#ddd';
+  const RING  = '#ccc';
+  const PI = Math.PI;
+  const PI2 = PI * 2;
+
+  // === DOM ===
+  const canvas = document.getElementById('ggxCanvas');
+  const ctx = canvas.getContext('2d');
+  const rSlider = document.getElementById('rSlider');
+  const sSlider = document.getElementById('sSlider');
+  const rValEl = document.getElementById('rVal');
+  const sValEl = document.getElementById('sVal');
+
+  // === State ===
+  let roughness = 0.5;
+  let numSamples = 512;
+  let orbitTheta = -PI / 5;
+  let orbitPhi = PI / 4.5;
+
+  // === Hammersley low-discrepancy sequence ===
+  function radicalInverse(bits) {
+    bits = ((bits << 16) | (bits >>> 16)) >>> 0;
+    bits = (((bits & 0x55555555) << 1) | ((bits & 0xAAAAAAAA) >>> 1)) >>> 0;
+    bits = (((bits & 0x33333333) << 2) | ((bits & 0xCCCCCCCC) >>> 2)) >>> 0;
+    bits = (((bits & 0x0F0F0F0F) << 4) | ((bits & 0xF0F0F0F0) >>> 4)) >>> 0;
+    bits = (((bits & 0x00FF00FF) << 8) | ((bits & 0xFF00FF00) >>> 8)) >>> 0;
+    return bits * 2.3283064365386963e-10;
+  }
+
+  // === GGX importance sampling ===
+  function ggxSamples(roughness, N) {
+    const a2 = Math.pow(roughness, 4);
+    const out = [];
+    for (let i = 0; i < N; i++) {
+      const u1 = i / N;
+      const u2 = radicalInverse(i);
+      const phi = PI2 * u1;
+      const cosT = Math.sqrt((1 - u2) / (1 + (a2 - 1) * u2));
+      const sinT = Math.sqrt(Math.max(0, 1 - cosT * cosT));
+      out.push({
+        x: sinT * Math.cos(phi),
+        y: cosT,
+        z: sinT * Math.sin(phi),
+        cosT,
+      });
+    }
+    return out;
+  }
+
+  // === Orbit projection (rotate Y by theta, then X by phi, then drop Z) ===
+  let projW, projH, projR;
+  function project(x, y, z) {
+    const cp = Math.cos(orbitPhi), sp = Math.sin(orbitPhi);
+    const ct = Math.cos(orbitTheta), st = Math.sin(orbitTheta);
+    const x1 = x * ct + z * st;
+    const z1 = -x * st + z * ct;
+    const y2 = y * cp - z1 * sp;
+    const z2 = y * sp + z1 * cp;
+    return {
+      sx: projW / 2 + x1 * projR,
+      sy: projH / 2 - y2 * projR,
+      depth: z2,
+    };
+  }
+
+  // === Drawing helpers ===
+  function polyline(points) {
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.sx, p.sy);
+      else ctx.lineTo(p.sx, p.sy);
+    });
+    ctx.stroke();
+  }
+
+  // Generate points along a parametric curve t in [0,1]
+  function curve(steps, fn) {
+    const pts = [];
+    for (let i = 0; i <= steps; i++) pts.push(project(...fn(i / steps)));
+    return pts;
+  }
+
+  function drawHemisphereFrame() {
+    // Silhouette (always a circle in our weak projection)
+    ctx.strokeStyle = RING;
+    ctx.lineWidth = 1.0;
+    ctx.beginPath();
+    ctx.arc(projW / 2, projH / 2, projR, 0, PI2);
+    ctx.stroke();
+
+    // Equator + 4 meridians
+    ctx.strokeStyle = GRID;
+    ctx.lineWidth = 0.8;
+    polyline(curve(64, t => {
+      const a = t * PI2;
+      return [Math.cos(a), 0, Math.sin(a)];
+    }));
+    for (let m = 0; m < 4; m++) {
+      const a = (m / 4) * PI2;
+      polyline(curve(32, t => {
+        const theta = t * PI / 2;
+        return [Math.sin(theta) * Math.cos(a), Math.cos(theta), Math.sin(theta) * Math.sin(a)];
+      }));
+    }
+  }
+
+  function drawNormalArrow() {
+    const base = project(0, 0, 0);
+    const tip = project(0, 1.25, 0);
+    ctx.strokeStyle = ACCENT;
+    ctx.fillStyle = ACCENT;
+    ctx.lineWidth = 1.8;
+
+    // Shaft
+    ctx.beginPath();
+    ctx.moveTo(base.sx, base.sy);
+    ctx.lineTo(tip.sx, tip.sy);
+    ctx.stroke();
+
+    // Arrowhead
+    const dx = tip.sx - base.sx, dy = tip.sy - base.sy;
+    const len = Math.hypot(dx, dy);
+    const ux = dx / len, uy = dy / len;
+    const s = 6;
+    ctx.beginPath();
+    ctx.moveTo(tip.sx, tip.sy);
+    ctx.lineTo(tip.sx - ux*s - uy*s*0.5, tip.sy - uy*s + ux*s*0.5);
+    ctx.lineTo(tip.sx - ux*s + uy*s*0.5, tip.sy - uy*s - ux*s*0.5);
+    ctx.closePath();
+    ctx.fill();
+
+    // Label
+    const lbl = project(0, 1.35, 0);
+    ctx.font = '600 14px SUIT, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('n', lbl.sx, lbl.sy);
+  }
+
+  function drawSamples() {
+    const projected = ggxSamples(roughness, numSamples)
+      .map(s => ({ ...project(s.x, s.y, s.z), cosT: s.cosT }))
+      .sort((a, b) => a.depth - b.depth);
+
+    for (const p of projected) {
+      // Color: cool (low cosT) -> warm (high cosT, near normal)
+      const t = p.cosT;
+      const r = Math.round(30 + t * 200);
+      const g = Math.round(80 + t * 80);
+      const b = Math.round(190 - t * 140);
+      const alpha = Math.min(0.85, 0.4 + (p.depth + 1) * 0.3);
+      ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, 2.2, 0, PI2);
+      ctx.fill();
+    }
+  }
+
+  function draw() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    projW = canvas.clientWidth;
+    projH = Math.round(projW * 0.85);
+    projR = Math.min(projW, projH) * 0.34;
+
+    canvas.width = projW * dpr;
+    canvas.height = projH * dpr;
+    canvas.style.height = projH + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, projW, projH);
+
+    drawHemisphereFrame();
+    drawNormalArrow();
+    drawSamples();
+  }
+
+  // === Input handlers ===
+  rSlider.addEventListener('input', () => {
+    roughness = +rSlider.value / 100;
+    rValEl.textContent = roughness.toFixed(2);
+    draw();
+  });
+  sSlider.addEventListener('input', () => {
+    numSamples = Math.max(1, Math.floor(Math.pow(2, +sSlider.value)));
+    sValEl.textContent = numSamples;
+    draw();
+  });
+
+  // Orbit drag
+  let dragging = false, prevX = 0, prevY = 0;
+  canvas.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    prevX = e.clientX; prevY = e.clientY;
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    orbitTheta += (e.clientX - prevX) * 0.008;
+    orbitPhi = Math.max(0.05, Math.min(PI / 2 - 0.05, orbitPhi + (e.clientY - prevY) * 0.008));
+    prevX = e.clientX; prevY = e.clientY;
+    draw();
+  });
+  const endDrag = () => { dragging = false; };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointerleave', endDrag);
+
+  window.addEventListener('resize', draw);
+  draw();
+})();
+</script>
+
+</body>
+</html>
