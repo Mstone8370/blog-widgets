@@ -48,6 +48,11 @@ function makeArrow(colorHex, len, headLen, shaftR, headR, seg) {
   return g;
 }
 
+// vec3 uniform(색상/벡터) 생성 헬퍼. 위젯 HTML 은 THREE 를 직접 import 하지 않으므로 제공.
+export function vec3(x, y, z) {
+  return new THREE.Vector3(x, y, z);
+}
+
 /*
  * @param {object} opts
  *   canvas         : <canvas> 엘리먼트 (필수)

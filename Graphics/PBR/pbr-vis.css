@@ -100,6 +100,15 @@ html, body {
   box-shadow: 0 1px 3px rgba(0,0,0,0.25);
   touch-action: none;
 }
+.pbr-vis input[type=color] {
+  width: 100%;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
 .pbr-vis .check {
   grid-column: 1 / -1;
   display: flex;
