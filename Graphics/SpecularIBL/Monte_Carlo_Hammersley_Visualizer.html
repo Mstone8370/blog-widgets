@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .mc-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .mc-vis .stats {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+  .mc-vis .stat-red { color: #d8334a; font-weight: 600; }
+  .mc-vis .stat-blue { color: #3b8fd1; font-weight: 600; }
+  .mc-vis .stat-total { color: #333; font-weight: 600; }
+
+  .mc-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .mc-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+  }
+  .mc-vis .formula {
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 16px;
+    color: #333;
+    padding: 4px;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .mc-vis .pi-red { color: #d8334a; font-weight: 600; }
+  .mc-vis .pi-result { color: #2a9d4a; font-weight: 700; font-size: 18px; }
+  .mc-vis .controls {
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 88px 1fr 64px;
+    align-items: center;
+    gap: 12px 12px;
+    flex-shrink: 0;
+  }
+  .mc-vis .label { font-size: 15px; color: #444; }
+  .mc-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .mc-vis input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 3px;
+    background: #d4d4d8;
+    border-radius: 2px;
+    outline: none;
+    margin: 0;
+    touch-action: pan-y;
+  }
+  .mc-vis input[type=range]::-webkit-slider-thumb,
+  .mc-vis input[type=range]::-moz-range-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #2052BB;
+    cursor: pointer;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="mc-vis">
+  <div class="stats">
+    <span class="stat-red" id="statRed">r = 0</span>
+    <span class="stat-blue" id="statBlue">b = 0</span>
+    <span class="stat-total" id="statTotal">n = 0</span>
+  </div>
+  <div class="canvas-wrap">
+    <canvas id="mcCanvas"></canvas>
+  </div>
+  <div class="formula" id="formula">
+    π ≈ 4 × 0 / 0 = —
+  </div>
+  <div class="controls">
+    <div class="label">Samples</div>
+    <input type="range" id="nSlider" min="0" max="8192" step="1" value="500">
+    <div class="value" id="nVal">500</div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const RED = '#d8334a';
+  const BLUE = '#3b8fd1';
+  const AXIS = '#555';
+
+  const canvas = document.getElementById('mcCanvas');
+  const ctx = canvas.getContext('2d');
+  const slider = document.getElementById('nSlider');
+  const nValEl = document.getElementById('nVal');
+  const formulaEl = document.getElementById('formula');
+  const statRedEl = document.getElementById('statRed');
+  const statBlueEl = document.getElementById('statBlue');
+  const statTotalEl = document.getElementById('statTotal');
+
+  let numSamples = 500;
+
+  // Hammersley sequence
+  function radicalInverse(bits) {
+    bits = ((bits << 16) | (bits >>> 16)) >>> 0;
+    bits = (((bits & 0x55555555) << 1) | ((bits & 0xAAAAAAAA) >>> 1)) >>> 0;
+    bits = (((bits & 0x33333333) << 2) | ((bits & 0xCCCCCCCC) >>> 2)) >>> 0;
+    bits = (((bits & 0x0F0F0F0F) << 4) | ((bits & 0xF0F0F0F0) >>> 4)) >>> 0;
+    bits = (((bits & 0x00FF00FF) << 8) | ((bits & 0xFF00FF00) >>> 8)) >>> 0;
+    return bits * 2.3283064365386963e-10;
+  }
+
+  // Generate samples on the fly (no caching needed since deterministic)
+  function getSample(i, N) {
+    return [(i + 0.5) / N, radicalInverse(i)];
+  }
+
+  // Coordinate transform helpers
+  let plotX, plotY, plotW, plotH;
+  function setupPlotArea() {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const marginL = 36, marginR = 16, marginT = 16, marginB = 36;
+    const availW = w - marginL - marginR;
+    const availH = h - marginT - marginB;
+    const size = Math.min(availW, availH);
+    plotX = marginL + (availW - size) / 2;
+    plotY = marginT + (availH - size) / 2;
+    plotW = size;
+    plotH = size;
+  }
+  function dataToScreen(x, y) {
+    return { sx: plotX + x * plotW, sy: plotY + (1 - y) * plotH };
+  }
+
+  function drawAxes() {
+    ctx.strokeStyle = AXIS;
+    ctx.fillStyle = AXIS;
+    ctx.lineWidth = 1;
+    ctx.font = '12px JetBrains Mono, monospace';
+
+    ctx.strokeRect(plotX, plotY, plotW, plotH);
+
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i <= 10; i++) {
+      const v = i / 10;
+      const y = plotY + (1 - v) * plotH;
+      ctx.beginPath();
+      ctx.moveTo(plotX, y);
+      ctx.lineTo(plotX - 3, y);
+      ctx.stroke();
+      if (i % 2 === 0) {
+        ctx.fillText(v.toFixed(1), plotX - 6, y);
+      }
+    }
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (let i = 0; i <= 10; i++) {
+      const v = i / 10;
+      const x = plotX + v * plotW;
+      ctx.beginPath();
+      ctx.moveTo(x, plotY + plotH);
+      ctx.lineTo(x, plotY + plotH + 3);
+      ctx.stroke();
+      if (i % 2 === 0) {
+        ctx.fillText(v.toFixed(1), x, plotY + plotH + 6);
+      }
+    }
+  }
+
+  function drawQuarterCircle() {
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    const cx = plotX;
+    const cy = plotY + plotH;
+    ctx.arc(cx, cy, plotW, -Math.PI / 2, 0);
+    ctx.stroke();
+  }
+
+  // Draw samples and return count inside
+  function drawSamplesAndCount() {
+    let red = 0;
+    for (let i = 0; i < numSamples; i++) {
+      const [x, y] = getSample(i, numSamples);
+      const inside = (x * x + y * y) <= 1.0;
+      if (inside) red++;
+      const p = dataToScreen(x, y);
+      ctx.fillStyle = inside ? RED : BLUE;
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return red;
+  }
+
+  function updateStats(red, total) {
+    const blue = total - red;
+    statRedEl.textContent = 'r = ' + red;
+    statBlueEl.textContent = 'b = ' + blue;
+    statTotalEl.textContent = 'n = ' + total;
+  }
+
+  function updateFormula(red, total) {
+    if (total === 0) {
+      formulaEl.innerHTML = 'π ≈ 4 × 0 / 0 = <span class="pi-result">—</span>';
+      return;
+    }
+    const pi = 4 * red / total;
+    formulaEl.innerHTML =
+      'π ≈ 4 × <span class="pi-red">' + red + '</span> / ' + total +
+      ' = <span class="pi-result">' + pi.toFixed(4) + '</span>';
+  }
+
+  function draw() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    setupPlotArea();
+    drawAxes();
+    const red = drawSamplesAndCount();
+    drawQuarterCircle();
+    updateStats(red, numSamples);
+    updateFormula(red, numSamples);
+  }
+
+  slider.addEventListener('input', () => {
+    numSamples = parseInt(slider.value);
+    nValEl.textContent = numSamples;
+    draw();
+  });
+
+  // Initial state
+  numSamples = parseInt(slider.value);
+  nValEl.textContent = numSamples;
+
+  window.addEventListener('resize', draw);
+  if (window.ResizeObserver) {
+    new ResizeObserver(draw).observe(canvas);
+  }
+  draw();
+})();
+</script>
+
+</body>
+</html>

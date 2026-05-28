@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="pbr-vis.css">
+</head>
+<body>
+
+<div class="pbr-vis">
+  <div class="canvas-wrap">
+    <div class="title"><em>V</em> Smith</div>
+    <canvas id="vCanvas"></canvas>
+  </div>
+  <div class="controls">
+    <label class="check">
+      <input type="checkbox" id="hcCheck" checked>
+      Height-correlated
+    </label>
+
+    <div class="label">Roughness</div>
+    <input type="range" id="rSlider" min="1" max="100" value="50">
+    <div class="value" id="rVal">0.50</div>
+
+    <div class="label">Light θ</div>
+    <input type="range" id="lSlider" min="0" max="180" value="40">
+    <div class="value" id="lVal">40°</div>
+  </div>
+</div>
+
+<script type="module">
+/*
+ * Smith 기반 GGX V(가시성, = G / (4·NoL·NoV)) 항을 구체에 시각화.
+ * UE Vis_Smith(separable) / Vis_SmithJoint(height-correlated) 그대로, 체크박스로 전환.
+ * 공용 씬은 ./pbr-vis.js.
+ */
+import { initPBRWidget } from './pbr-vis.js';
+
+const PI = Math.PI;
+
+const w = initPBRWidget({
+  canvas: document.getElementById('vCanvas'),
+  uniforms: { uRough: { value: 0.5 }, uHeightCorr: { value: 1 } },
+  orbitAz: 0.6,
+  lightTheta: 40 * PI / 180,
+  fragmentShader: `
+    precision highp float;
+    varying vec3 vN;
+    varying vec3 vWP;
+    uniform float uRough;
+    uniform float uHeightCorr;
+    uniform vec3 uLightDir;
+    uniform vec3 uCamPos;
+
+    // UE Vis_SmithJoint (height-correlated)
+    float visSmithJoint(float a2, float NoV, float NoL) {
+      float vV = NoL * sqrt(NoV * (NoV - NoV * a2) + a2);
+      float vL = NoV * sqrt(NoL * (NoL - NoL * a2) + a2);
+      return 0.5 / (vV + vL);
+    }
+    // UE Vis_Smith (separable)
+    float visSmith(float a2, float NoV, float NoL) {
+      float vV = NoV + sqrt(NoV * (NoV - NoV * a2) + a2);
+      float vL = NoL + sqrt(NoL * (NoL - NoL * a2) + a2);
+      return 1.0 / (vV * vL);
+    }
+
+    void main() {
+      vec3 N = normalize(vN);
+      vec3 V = normalize(uCamPos - vWP);
+      vec3 L = normalize(uLightDir);
+
+      float NoV = max(dot(N, V), 0.0);
+      float NoL = max(dot(N, L), 0.0);
+
+      float a  = uRough * uRough;   // α = roughness²
+      float a2 = a * a;             // α²
+
+      float Vis = uHeightCorr > 0.5
+        ? visSmithJoint(a2, NoV, NoL)
+        : visSmith(a2, NoV, NoL);
+
+      float val = NoL > 0.0 ? Vis : 0.0;
+      gl_FragColor = vec4(vec3(val), 1.0);
+    }
+  `,
+});
+
+// ---- 컨트롤 ----
+const rSlider = document.getElementById('rSlider');
+const rValEl = document.getElementById('rVal');
+const lSlider = document.getElementById('lSlider');
+const lValEl = document.getElementById('lVal');
+const hcCheck = document.getElementById('hcCheck');
+
+rSlider.addEventListener('input', () => {
+  const roughness = +rSlider.value / 100;
+  rValEl.textContent = roughness.toFixed(2);
+  w.sphereMat.uniforms.uRough.value = roughness;
+  w.requestDraw();
+});
+lSlider.addEventListener('input', () => {
+  lValEl.textContent = lSlider.value + '°';
+  w.setLightTheta(+lSlider.value * PI / 180);
+});
+hcCheck.addEventListener('change', () => {
+  w.sphereMat.uniforms.uHeightCorr.value = hcCheck.checked ? 1 : 0;
+  w.requestDraw();
+});
+</script>
+
+</body>
+</html>

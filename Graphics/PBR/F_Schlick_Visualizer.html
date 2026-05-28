@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="pbr-vis.css">
+</head>
+<body>
+
+<div class="pbr-vis">
+  <div class="canvas-wrap">
+    <div class="title"><em>F</em> Schlick</div>
+    <canvas id="fCanvas"></canvas>
+  </div>
+  <div class="controls">
+    <div class="label">Light θ</div>
+    <input type="range" id="lSlider" min="0" max="180" value="80">
+    <div class="value" id="lVal">80°</div>
+  </div>
+</div>
+
+<script type="module">
+/*
+ * Schlick 근사 Fresnel 항 F = F0 + (1 - F0)(1 - VoH)^5 를 구체에 시각화.
+ * F0 는 짙은 빨강(고정). 강도 2. 공용 씬은 ./pbr-vis.js.
+ */
+import { initPBRWidget } from './pbr-vis.js';
+
+const PI = Math.PI;
+
+const w = initPBRWidget({
+  canvas: document.getElementById('fCanvas'),
+  uniforms: { uF0: { value: 0.25 } },   // 짙은 빨강 red 채널 (고정)
+  orbitAz: -1.8,
+  lightTheta: 80 * PI / 180,
+  fragmentShader: `
+    precision highp float;
+    varying vec3 vN;
+    varying vec3 vWP;
+    uniform float uF0;
+    uniform vec3 uLightDir;
+    uniform vec3 uCamPos;
+
+    void main() {
+      vec3 N = normalize(vN);
+      vec3 V = normalize(uCamPos - vWP);
+      vec3 L = normalize(uLightDir);
+      vec3 H = normalize(L + V);
+
+      float VoH = max(dot(V, H), 0.0);
+      float NoL = max(dot(N, L), 0.0);
+
+      vec3 F0col = vec3(uF0, uF0 * 0.06, uF0 * 0.06);   // hue 고정
+      float fc = pow(1.0 - VoH, 5.0);
+      vec3 F = F0col + (vec3(1.0) - F0col) * fc;
+
+      vec3 col = NoL > 0.0 ? F * 2.0 : vec3(0.0);   // 빛 닿는 반구, 강도 2
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+});
+
+// ---- 컨트롤 ----
+const lSlider = document.getElementById('lSlider');
+const lValEl = document.getElementById('lVal');
+lSlider.addEventListener('input', () => {
+  lValEl.textContent = lSlider.value + '°';
+  w.setLightTheta(+lSlider.value * PI / 180);
+});
+</script>
+
+</body>
+</html>

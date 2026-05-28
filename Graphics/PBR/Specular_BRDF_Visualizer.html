@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="pbr-vis.css">
+</head>
+<body>
+
+<div class="pbr-vis">
+  <div class="canvas-wrap">
+    <div class="title">Specular BRDF</div>
+    <canvas id="specCanvas"></canvas>
+  </div>
+  <div class="controls">
+    <div class="label">Roughness</div>
+    <input type="range" id="rSlider" min="1" max="100" value="50">
+    <div class="value" id="rVal">0.50</div>
+
+    <div class="label">Light θ</div>
+    <input type="range" id="lSlider" min="0" max="180" value="40">
+    <div class="value" id="lVal">40°</div>
+  </div>
+</div>
+
+<script type="module">
+/*
+ * 스페큘러 BRDF (Cook-Torrance): spec = D·F·V, 최종 = spec·NoL.
+ *   D : GGX,  F : Schlick(F0=(1,0,0)),  V : height-correlated Smith.
+ * 공용 씬은 ./pbr-vis.js.
+ */
+import { initPBRWidget } from './pbr-vis.js';
+
+const PI = Math.PI;
+
+const w = initPBRWidget({
+  canvas: document.getElementById('specCanvas'),
+  uniforms: { uRough: { value: 0.5 } },
+  orbitAz: 0.6,
+  lightTheta: 40 * PI / 180,
+  fragmentShader: `
+    precision highp float;
+    varying vec3 vN;
+    varying vec3 vWP;
+    uniform float uRough;
+    uniform vec3 uLightDir;
+    uniform vec3 uCamPos;
+    const float PI = 3.14159265359;
+    const vec3 F0 = vec3(1.0, 0.0, 0.0);
+
+    // UE Vis_SmithJoint (height-correlated, = G / (4·NoL·NoV))
+    float visSmithJoint(float a2, float NoV, float NoL) {
+      float vV = NoL * sqrt(NoV * (NoV - NoV * a2) + a2);
+      float vL = NoV * sqrt(NoL * (NoL - NoL * a2) + a2);
+      return 0.5 / (vV + vL);
+    }
+
+    void main() {
+      vec3 N = normalize(vN);
+      vec3 V = normalize(uCamPos - vWP);
+      vec3 L = normalize(uLightDir);
+      vec3 H = normalize(L + V);
+
+      float NoH = max(dot(N, H), 0.0);
+      float NoV = max(dot(N, V), 0.0);
+      float NoL = max(dot(N, L), 0.0);
+      float VoH = max(dot(V, H), 0.0);
+
+      float a  = uRough * uRough;   // α = roughness²
+      float a2 = a * a;             // α²
+
+      float d = NoH * NoH * (a2 - 1.0) + 1.0;
+      float D = a2 / (PI * d * d);                              // D : GGX
+      vec3  F = F0 + (vec3(1.0) - F0) * pow(1.0 - VoH, 5.0);    // F : Schlick
+      float Vis = visSmithJoint(a2, NoV, NoL);                 // V : height-correlated Smith
+
+      vec3 col = NoL > 0.0 ? D * F * Vis * NoL * 3.0 : vec3(0.0);
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+});
+
+// ---- 컨트롤 ----
+const rSlider = document.getElementById('rSlider');
+const rValEl = document.getElementById('rVal');
+const lSlider = document.getElementById('lSlider');
+const lValEl = document.getElementById('lVal');
+
+rSlider.addEventListener('input', () => {
+  const roughness = +rSlider.value / 100;
+  rValEl.textContent = roughness.toFixed(2);
+  w.sphereMat.uniforms.uRough.value = roughness;
+  w.requestDraw();
+});
+lSlider.addEventListener('input', () => {
+  lValEl.textContent = lSlider.value + '°';
+  w.setLightTheta(+lSlider.value * PI / 180);
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="pbr-vis.css">
+</head>
+<body>
+
+<div class="pbr-vis">
+  <div class="canvas-wrap">
+    <div class="title">Diffuse</div>
+    <canvas id="diffCanvas"></canvas>
+  </div>
+  <div class="controls">
+    <div class="label">Roughness</div>
+    <input type="range" id="rSlider" min="1" max="100" value="100">
+    <div class="value" id="rVal">1.00</div>
+
+    <div class="label">Light θ</div>
+    <input type="range" id="lSlider" min="0" max="180" value="40">
+    <div class="value" id="lVal">40°</div>
+
+    <div class="segment" id="modelSeg">
+      <button data-model="0" class="active">Lambertian</button>
+      <button data-model="1">Disney</button>
+      <button data-model="2">EON</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+/*
+ * Diffuse BRDF 3종을 구체에 시각화 (세그먼트 버튼으로 전환), 최종 = diffuse·NoL, 강도 3.
+ *   Lambertian : c/π
+ *   Disney     : UE Diffuse_Burley (VoH)
+ *   EON        : UE Diffuse_EON (Oren-Nayar 계열, VoL)
+ * DiffuseColor = 0.7 중립 회색. 공용 씬은 ./pbr-vis.js.
+ */
+import { initPBRWidget } from './pbr-vis.js';
+
+const PI = Math.PI;
+
+const w = initPBRWidget({
+  canvas: document.getElementById('diffCanvas'),
+  uniforms: { uRough: { value: 1.0 }, uModel: { value: 0 } },
+  orbitAz: 0.6,
+  lightTheta: 40 * PI / 180,
+  fragmentShader: `
+    precision highp float;
+    varying vec3 vN;
+    varying vec3 vWP;
+    uniform float uRough;
+    uniform float uModel;
+    uniform vec3 uLightDir;
+    uniform vec3 uCamPos;
+    const float PI = 3.14159265359;
+    const vec3 DIFFUSE_COLOR = vec3(0.7);
+
+    float pow5(float x) { float x2 = x * x; return x2 * x2 * x; }
+
+    // UE Diffuse_Burley (Disney)
+    vec3 diffuseBurley(vec3 c, float rough, float NoV, float NoL, float VoH) {
+      float FD90 = 0.5 + 2.0 * VoH * VoH * rough;
+      float FdV = 1.0 + (FD90 - 1.0) * pow5(1.0 - NoV);
+      float FdL = 1.0 + (FD90 - 1.0) * pow5(1.0 - NoL);
+      return c * ((1.0 / PI) * FdV * FdL);
+    }
+
+    // UE Diffuse_EON (Oren-Nayar 계열)
+    vec3 diffuseEON(vec3 c, float rough, float NoV, float NoL, float VoL) {
+      vec3 Rho = c * (1.0 + (0.189468 - 0.189468 * c) * rough);
+      float S = VoL - NoV * NoL;
+      float SOverT = max(S / max(1e-6, max(NoV, NoL)), S);
+      const float constant1_FON = 0.5 - 2.0 / (3.0 * PI);
+      float AF = 1.0 - rough * (1.0 - 1.0 / (1.0 + constant1_FON));
+      float f_ss = AF * (1.0 + rough * SOverT);
+      const float g1 = 0.262048;
+      float GoverPi_V = g1 - g1 * NoV;
+      float f_ms = 1.0 - AF * (1.0 + rough * GoverPi_V);
+      return Rho * (f_ss + Rho * f_ms) * (1.0 / PI);
+    }
+
+    void main() {
+      vec3 N = normalize(vN);
+      vec3 V = normalize(uCamPos - vWP);
+      vec3 L = normalize(uLightDir);
+      vec3 H = normalize(L + V);
+
+      float NoV = max(dot(N, V), 0.0);
+      float NoL = max(dot(N, L), 0.0);
+      float VoH = max(dot(V, H), 0.0);
+      float VoL = dot(V, L);
+
+      vec3 diff;
+      if (uModel < 0.5) {
+        diff = DIFFUSE_COLOR / PI;                                  // Lambertian
+      } else if (uModel < 1.5) {
+        diff = diffuseBurley(DIFFUSE_COLOR, uRough, NoV, NoL, VoH);  // Disney
+      } else {
+        diff = diffuseEON(DIFFUSE_COLOR, uRough, NoV, NoL, VoL);     // EON
+      }
+
+      vec3 col = NoL > 0.0 ? diff * NoL * 3.0 : vec3(0.0);   // 강도 3
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+});
+
+// ---- 컨트롤 ----
+const rSlider = document.getElementById('rSlider');
+const rValEl = document.getElementById('rVal');
+const lSlider = document.getElementById('lSlider');
+const lValEl = document.getElementById('lVal');
+const modelSeg = document.getElementById('modelSeg');
+
+rSlider.addEventListener('input', () => {
+  const roughness = +rSlider.value / 100;
+  rValEl.textContent = roughness.toFixed(2);
+  w.sphereMat.uniforms.uRough.value = roughness;
+  w.requestDraw();
+});
+lSlider.addEventListener('input', () => {
+  lValEl.textContent = lSlider.value + '°';
+  w.setLightTheta(+lSlider.value * PI / 180);
+});
+modelSeg.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  modelSeg.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+  btn.classList.add('active');
+  w.sphereMat.uniforms.uModel.value = +btn.dataset.model;
+  w.requestDraw();
+});
+</script>
+
+</body>
+</html>
