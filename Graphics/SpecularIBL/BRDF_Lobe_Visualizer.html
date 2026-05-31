@@ -453,20 +453,70 @@
     draw();
   });
 
-  let dragging = false, prevX = 0, prevY = 0;
+  // ---- 드래그 + 관성 (2축) ----
+  const PHI_MIN = 0.05, PHI_MAX = PI / 2 - 0.05;
+  const DAMP = 10;        // 관성 감쇠 (클수록 빨리 멈춤)
+  const VEL_MIN = 0.15;   // 이 속도 이하 → 관성 종료
+  let dragging = false, prevX = 0, prevY = 0, lastMoveT = 0;
+  let vT = 0, vP = 0;     // 각속도 (rad/s)
+  let inertiaActive = false, prevTickT = 0;
+
+  function tickInertia(now) {
+    const dt = Math.min((now - prevTickT) / 1000, 0.1);
+    prevTickT = now;
+    orbitTheta += vT * dt;
+    const newPhi = orbitPhi + vP * dt;
+    if (newPhi <= PHI_MIN)      { orbitPhi = PHI_MIN; vP = 0; }   // 클램프에 닿으면 축 속도 정지
+    else if (newPhi >= PHI_MAX) { orbitPhi = PHI_MAX; vP = 0; }
+    else                        { orbitPhi = newPhi; }
+    vT *= Math.exp(-dt * DAMP);
+    vP *= Math.exp(-dt * DAMP);
+    draw();
+    if (Math.abs(vT) < VEL_MIN && Math.abs(vP) < VEL_MIN) {
+      vT = 0; vP = 0;
+      inertiaActive = false;
+      return;
+    }
+    requestAnimationFrame(tickInertia);
+  }
+  function startInertia() {
+    if (inertiaActive) return;
+    if (Math.abs(vT) < VEL_MIN && Math.abs(vP) < VEL_MIN) return;
+    inertiaActive = true;
+    prevTickT = performance.now();
+    requestAnimationFrame(tickInertia);
+  }
+
   canvas.addEventListener('pointerdown', (e) => {
     dragging = true;
+    vT = 0; vP = 0;          // 새 드래그 → 진행 중 관성 즉시 중단
+    inertiaActive = false;
     prevX = e.clientX; prevY = e.clientY;
+    lastMoveT = performance.now();
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!dragging) return;
-    orbitTheta += (e.clientX - prevX) * 0.008;
-    orbitPhi = Math.max(0.05, Math.min(PI / 2 - 0.05, orbitPhi + (e.clientY - prevY) * 0.008));
+    const mt = performance.now();
+    const dt = Math.max((mt - lastMoveT) / 1000, 1e-3);
+    const dT = (e.clientX - prevX) * 0.008;
+    const newPhi = orbitPhi + (e.clientY - prevY) * 0.008;
+    const clampedPhi = Math.max(PHI_MIN, Math.min(PHI_MAX, newPhi));
+    const dP = clampedPhi - orbitPhi;   // 클램프 후 실제 이동량 (관성 누적 방지)
+    orbitTheta += dT;
+    orbitPhi = clampedPhi;
+    vT = dT / dt;
+    vP = dP / dt;
     prevX = e.clientX; prevY = e.clientY;
+    lastMoveT = mt;
     draw();
   });
-  const endDrag = () => { dragging = false; };
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    if (performance.now() - lastMoveT > 100) { vT = 0; vP = 0; }   // 멈춘 채 놓으면 관성 없음
+    startInertia();
+  };
   canvas.addEventListener('pointerup', endDrag);
   canvas.addEventListener('pointerleave', endDrag);
 
