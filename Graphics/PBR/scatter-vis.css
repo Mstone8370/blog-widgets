@@ -1,0 +1,93 @@
+/*
+ * 스캐터링(미세면 단면) 시각화 위젯 공용 스타일.
+ * Single/Multi Scattering 위젯 HTML이 .scatter-vis 컨테이너로 사용한다.
+ * (위젯은 각자 iframe 안의 독립 문서라 클래스 충돌 걱정이 없으므로 단일 프리픽스 사용)
+ */
+@import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #fdfdfd;
+}
+
+.scatter-vis {
+  font-family: 'SUIT', sans-serif;
+  width: 100%;
+  height: 100%;
+  background: #fdfdfd;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  padding: 12px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.scatter-vis .canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.scatter-vis .title {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fdfdfd;
+  padding: 10px 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+  letter-spacing: 0.6px;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+.scatter-vis canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #fdfdfd;
+}
+.scatter-vis .controls {
+  padding: 4px;
+  display: grid;
+  grid-template-columns: 88px 1fr 56px;
+  align-items: center;
+  gap: 12px 12px;
+  flex-shrink: 0;
+}
+.scatter-vis .label { font-size: 15px; color: #444; }
+.scatter-vis .value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  color: #2052BB;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.scatter-vis input[type=range] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  background: #d4d4d8;
+  border-radius: 2px;
+  outline: none;
+  margin: 0;
+  touch-action: pan-y;
+}
+.scatter-vis input[type=range]::-webkit-slider-thumb,
+.scatter-vis input[type=range]::-moz-range-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #2052BB;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  touch-action: none;
+}

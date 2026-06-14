@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="scatter-vis.css">
+</head>
+<body>
+
+<div class="scatter-vis">
+  <div class="canvas-wrap">
+    <div class="title">Multi Scattering</div>
+    <canvas id="scatterCanvas"></canvas>
+  </div>
+  <div class="controls">
+    <div class="label">Light θ</div>
+    <input type="range" id="tSlider" min="10" max="70" step="0.1" value="30">
+    <div class="value" id="tVal">30.0°</div>
+  </div>
+</div>
+
+<script type="module">
+/*
+ * 멀티 스캐터링: 다른 미세면에 막힌 빛도 재귀적으로 반사를 거듭해 결국 표면을 빠져나간다.
+ * 미세면 생성·광선 추적·그리기 공용 로직은 ./scatter-vis.js —
+ * 거기를 수정하면 Single_Scattering_Visualizer 와 함께 반영된다.
+ */
+import { initScatterWidget } from './scatter-vis.js';
+
+initScatterWidget({
+  canvas: document.getElementById('scatterCanvas'),
+  slider: document.getElementById('tSlider'),
+  valueEl: document.getElementById('tVal'),
+  multi: true,
+});
+</script>
+
+</body>
+</html>
