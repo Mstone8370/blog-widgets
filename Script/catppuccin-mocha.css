@@ -1,0 +1,188 @@
+.dark code.hljs {
+    color: #cdd6f4;
+    background: #1e1e2e;
+    font-weight: 400;
+}
+
+.dark code .hljs-keyword {
+    color: #cba6f7
+}
+
+.dark code .hljs-built_in {
+    color: #f38ba8
+}
+
+.dark code .hljs-type {
+    color: #f9e2af
+}
+
+.dark code .hljs-literal {
+    color: #fab387
+}
+
+.dark code .hljs-number {
+    color: #fab387
+}
+
+.dark code .hljs-operator {
+    color: #89dceb
+}
+
+.dark code .hljs-punctuation {
+    color: #bac2de
+}
+
+.dark code .hljs-property {
+    color: #94e2d5
+}
+
+.dark code .hljs-regexp {
+    color: #f5c2e7
+}
+
+.dark code .hljs-string {
+    color: #a6e3a1
+}
+
+.dark code .hljs-char.escape_ {
+    color: #a6e3a1
+}
+
+.dark code .hljs-subst {
+    color: #a6adc8
+}
+
+.dark code .hljs-symbol {
+    color: #f2cdcd
+}
+
+.dark code .hljs-variable {
+    color: #cba6f7
+}
+
+.dark code .hljs-variable.language_ {
+    color: #cba6f7
+}
+
+.dark code .hljs-variable.constant_ {
+    color: #fab387
+}
+
+.dark code .hljs-title {
+    color: #89b4fa
+}
+
+.dark code .hljs-title.class_ {
+    color: #f9e2af
+}
+
+.dark code .hljs-title.function_ {
+    color: #89b4fa
+}
+
+.dark code .hljs-params {
+    color: #cdd6f4
+}
+
+.dark code .hljs-comment {
+    color: #9399b2;
+    font-style: italic;
+}
+
+.dark code .hljs-doctag {
+    color: #f38ba8
+}
+
+.dark code .hljs-meta {
+    color: #fab387
+}
+
+.dark code .hljs-section {
+    color: #89b4fa
+}
+
+.dark code .hljs-tag {
+    color: #94e2d5
+}
+
+.dark code .hljs-name {
+    color: #cba6f7
+}
+
+.dark code .hljs-attr {
+    color: #89b4fa
+}
+
+.dark code .hljs-attribute {
+    color: #a6e3a1
+}
+
+.dark code .hljs-bullet {
+    color: #94e2d5
+}
+
+.dark code .hljs-.dark code {
+    color: #a6e3a1
+}
+
+.dark code .hljs-emphasis {
+    color: #f38ba8;
+    font-style: italic
+}
+
+.dark code .hljs-strong {
+    color: #f38ba8;
+    font-weight: bold
+}
+
+.dark code .hljs-formula {
+    color: #94e2d5
+}
+
+.dark code .hljs-link {
+    color: #74c7ec;
+    font-style: italic
+}
+
+.dark code .hljs-quote {
+    color: #a6e3a1;
+    font-style: italic
+}
+
+.dark code .hljs-selector-tag {
+    color: #f9e2af
+}
+
+.dark code .hljs-selector-id {
+    color: #89b4fa
+}
+
+.dark code .hljs-selector-class {
+    color: #94e2d5
+}
+
+.dark code .hljs-selector-attr {
+    color: #cba6f7
+}
+
+.dark code .hljs-selector-pseudo {
+    color: #94e2d5
+}
+
+.dark code .hljs-template-tag {
+    color: #f2cdcd
+}
+
+.dark code .hljs-template-variable {
+    color: #f2cdcd
+}
+
+.dark code .hljs-addition {
+    color: #a6e3a1;
+    background: rgba(166,227,161,.15)
+}
+
+.dark code .hljs-deletion {
+    color: #f38ba8;
+    background: rgba(243,139,168,.15)
+}
