@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .sh-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .sh-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .sh-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    background: #404040;
+    touch-action: none;
+  }
+  .sh-vis canvas:active { cursor: grabbing; }
+  .sh-vis .controls {
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 88px 1fr 72px;
+    align-items: center;
+    gap: 12px 12px;
+    flex-shrink: 0;
+  }
+  .sh-vis .label { font-size: 15px; color: #444; }
+  .sh-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .sh-vis input[type=color] {
+    width: 100%;
+    height: 22px;
+    padding: 0;
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    background: none;
+    cursor: pointer;
+  }
+  .sh-vis .segment {
+    grid-column: 1 / -1;
+    display: flex;
+    border: 1px solid #d4d4d8;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .sh-vis .segment button {
+    flex: 1;
+    border: none;
+    border-right: 1px solid #e3e3e6;
+    background: #fff;
+    padding: 7px 4px;
+    font-family: 'SUIT', sans-serif;
+    font-size: 14px;
+    color: #555;
+    cursor: pointer;
+  }
+  .sh-vis .segment button:last-child { border-right: none; }
+  .sh-vis .segment button.active {
+    background: #2052BB;
+    color: #fff;
+  }
+</style>
+</head>
+<body>
+
+<div class="sh-vis">
+  <div class="canvas-wrap">
+    <canvas id="shCanvas"></canvas>
+  </div>
+  <div class="controls">
+    <div class="label">Diffuse</div>
+    <input type="color" id="cPicker" value="#ffffff">
+    <div class="value" id="cVal">#FFFFFF</div>
+
+    <div class="segment" id="modeSeg">
+      <button data-mode="sh" class="active">SH</button>
+      <button data-mode="map">Irradiance Map</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+/*
+ * Diffuse IBL 의 SH(3밴드, 9계수) 버전. 9개 SH 계수로 노멀별 irradiance(/pi)를 복원해
+ * 구체를 셰이딩한다. 세그먼트 버튼 [SH | Irradiance Map] 로 SH 복원과 irradiance 큐브맵(텍스처)을
+ * 전환해 직접 비교. 배경은 원본 환경 큐브맵. 씬/카메라/UI 는 디퓨즈(irradiance) 위젯과 동일.
+ *
+ * 셰이딩: E/pi = Σ SH[i]·B_i(N)  (EvaluateSH 그대로),  결과 = diffuseColor · (E/pi).
+ * 계수는 엔진에서 HDRI 로부터 투영해 구한 값(A-hat_l/pi 컨볼루션 포함). 선형 값이라 표시 시 감마 2.2.
+ *
+ * 좌표계: 씬은 Unreal(X앞,Y오른,Z위). SH 프레임은 Z가 천정축(zonal m=0 = 3Z²-1).
+ * 배경과 같은 프레임을 쓰도록 SH 입력 방향에도 cubeDir(v)=(v.x,-v.y,v.z) 적용(Three 우수<->소스 좌수).
+ * → SH 구체의 밝은 면이 배경 창문과 안 맞으면 cubeDir 한 줄만 조정.
+ */
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+const PI = Math.PI;
+const GAMMA = 2.2;
+const BASE_FOV = 40 * PI / 180;
+const CAM_DIST = 4.2;
+const GRID_C   = 0xe3e3e6;
+const GRID_MID = 0xd0d0d4;
+const AXIS_C   = 0x8a93a6;
+
+// 이 환경(이미지)에 맞는 SH 계수 9개 (RGB). 엔진 SphericalHarmonicsFromHDRI 결과.
+const SH_COEFFS = [
+  [ 2.06894,    1.6961,     1.38278   ],
+  [ 0.24717,    0.210399,   0.221209  ],
+  [ 0.00561719, 0.139907,   0.123811  ],
+  [ 0.527012,   0.649308,   0.728762  ],
+  [-0.00848533, 0.0160411,  0.0357868 ],
+  [-0.0439908, -0.011924,  -0.00426112],
+  [-0.0749898, -0.157596,  -0.191435  ],
+  [ 0.174448,   0.138408,   0.133159  ],
+  [ 0.0560221,  0.0511187,  0.0539518 ],
+].map(c => new THREE.Vector3(c[0], c[1], c[2]));
+
+const canvas = document.getElementById('shCanvas');
+const cPicker = document.getElementById('cPicker');
+const cValEl = document.getElementById('cVal');
+const modeSeg = document.getElementById('modeSeg');
+
+// ---- renderer / scene / camera ----
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setClearColor(0x404040, 1);
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
+camera.up.set(0, 0, 1);   // Z-up (Unreal)
+
+// ---- 배경 원본 환경 큐브맵 ----
+const envTex = new THREE.CubeTextureLoader()
+  .setPath('./Cubemap/')
+  .load(['Xp.png', 'Xm.png', 'Yp.png', 'Ym.png', 'Zp.png', 'Zm.png'], () => render());
+envTex.colorSpace = THREE.LinearSRGBColorSpace;
+envTex.flipY = false;
+
+// ---- irradiance 큐브맵 (체크박스로 SH 와 비교) ----
+const irradianceTex = new THREE.CubeTextureLoader()
+  .setPath('./Irradiance/')
+  .load(['Xp.png', 'Xm.png', 'Yp.png', 'Ym.png', 'Zp.png', 'Zm.png'], () => render());
+irradianceTex.colorSpace = THREE.LinearSRGBColorSpace;
+irradianceTex.flipY = false;
+irradianceTex.minFilter = THREE.LinearFilter;
+irradianceTex.magFilter = THREE.LinearFilter;
+irradianceTex.generateMipmaps = false;
+
+// 공용 GLSL: 좌표 변환(좌우 반전) + 감마
+const CUBE_GLSL = `
+  vec3 cubeDir(vec3 v) { return vec3(v.x, -v.y, v.z); }   // UE축 그대로 + 좌우(Y) 반전(LH<->RH)
+  vec3 gammaEnc(vec3 c) { return pow(max(c, 0.0), vec3(1.0 / ${GAMMA.toFixed(4)})); }
+`;
+
+// ---- 배경 스카이박스 ----
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: { uEnv: { value: envTex } },
+  side: THREE.BackSide,
+  depthWrite: false,
+  vertexShader: `
+    varying vec3 vWorldPos;
+    void main() {
+      vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+    uniform samplerCube uEnv;
+    varying vec3 vWorldPos;
+    ${CUBE_GLSL}
+    void main() {
+      vec3 d = normalize(vWorldPos - cameraPosition);
+      gl_FragColor = vec4(gammaEnc(textureCube(uEnv, cubeDir(d)).rgb), 1.0);
+    }
+  `,
+});
+const sky = new THREE.Mesh(new THREE.BoxGeometry(200, 200, 200), skyMat);
+sky.frustumCulled = false;
+sky.renderOrder = -1;
+scene.add(sky);
+
+// ---- SH irradiance 구체 ----
+const sphereMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uSH: { value: SH_COEFFS },
+    uIrradiance: { value: irradianceTex },
+    uUseMap: { value: 0.0 },
+    uDiffuseColor: { value: new THREE.Color(1, 1, 1) },
+  },
+  vertexShader: `
+    varying vec3 vN;
+    void main() {
+      vN = normalize(mat3(modelMatrix) * normal);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+    uniform vec3 uSH[9];
+    uniform samplerCube uIrradiance;
+    uniform float uUseMap;
+    uniform vec3 uDiffuseColor;
+    varying vec3 vN;
+    ${CUBE_GLSL}
+
+    // EvaluateSH: 3밴드 실수 SH 기저로 E/pi 복원 (엔진 HLSL 그대로)
+    vec3 evalSH(vec3 n) {
+      float X = n.x, Y = n.y, Z = n.z;
+      return uSH[0] * 0.282095
+           + uSH[1] * (0.488603 * Y)
+           + uSH[2] * (0.488603 * Z)
+           + uSH[3] * (0.488603 * X)
+           + uSH[4] * (1.092548 * X * Y)
+           + uSH[5] * (1.092548 * Y * Z)
+           + uSH[6] * (0.315392 * (3.0 * Z * Z - 1.0))
+           + uSH[7] * (1.092548 * X * Z)
+           + uSH[8] * (0.546274 * (X * X - Y * Y));
+    }
+
+    void main() {
+      vec3 n = cubeDir(normalize(vN));     // 배경과 같은 프레임
+      vec3 e = uUseMap > 0.5
+        ? textureCube(uIrradiance, n).rgb  // irradiance 큐브맵 (텍스처)
+        : evalSH(n);                       // SH 복원 (E/pi)
+      gl_FragColor = vec4(gammaEnc(e * uDiffuseColor), 1.0);   // gammaEnc 가 음수 클램프 처리
+    }
+  `,
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), sphereMat));
+
+// ---- 바닥 격자 (x-y 평면, z=0) + z축 선: UE 좌표 기준 방향 표시 ----
+const grid = new THREE.GridHelper(4, 8, GRID_MID, GRID_C);
+grid.rotation.x = PI / 2;
+scene.add(grid);
+scene.add(new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1.5),
+  ]),
+  new THREE.LineBasicMaterial({ color: AXIS_C })
+));
+
+// ---- 카메라 (구면 좌표: azimuth + elevation) ----
+let orbitAz = 0.6;
+let orbitEl = 0.35;
+const EL_MAX = 1.45, EL_MIN = -1.45;
+function updateCamera() {
+  const ce = Math.cos(orbitEl), se = Math.sin(orbitEl);
+  camera.position.set(
+    CAM_DIST * ce * Math.cos(orbitAz),
+    CAM_DIST * ce * Math.sin(orbitAz),
+    CAM_DIST * se
+  );
+  camera.lookAt(0, 0, 0);
+}
+
+function render() {
+  updateCamera();
+  renderer.render(scene, camera);
+}
+
+// ---- Diffuse Color 컬러피커 ----
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+cPicker.addEventListener('input', () => {
+  const [r, g, b] = hexToRgb(cPicker.value);
+  sphereMat.uniforms.uDiffuseColor.value.setRGB(r, g, b);
+  cValEl.textContent = cPicker.value.toUpperCase();
+  render();
+});
+modeSeg.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  modeSeg.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+  btn.classList.add('active');
+  sphereMat.uniforms.uUseMap.value = btn.dataset.mode === 'map' ? 1.0 : 0.0;
+  render();
+});
+
+// ---- 적응형 FOV resize ----
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(w, h, false);
+  const aspect = w / h;
+  camera.aspect = aspect;
+  const vfov = aspect >= 1 ? BASE_FOV : 2 * Math.atan(Math.tan(BASE_FOV / 2) / aspect);
+  camera.fov = vfov * 180 / PI;
+  camera.updateProjectionMatrix();
+  render();
+}
+
+// ---- 상시 rAF 루프: 드래그 / 2축 관성 / 유휴 시 azimuth 자동회전 (BRDF 시각화와 동일) ----
+const DAMP      = 10;
+const VEL_MIN   = 0.15;
+const idleDelay = 3.0;
+const rotSpeed  = 0.25;
+const RAMP_TIME = 1.5;
+
+let dragging = false, prevX = 0, prevY = 0, lastMoveT = 0;
+let vAz = 0, vEl = 0;
+let lastInput = -Infinity;
+let ramp = 0;
+let prevT = performance.now();
+
+function tick(now) {
+  const dt = Math.min((now - prevT) / 1000, 0.1);
+  prevT = now;
+  if (dragging) {
+    lastInput = now;
+    ramp = 0;
+  } else if (Math.abs(vAz) > VEL_MIN || Math.abs(vEl) > VEL_MIN) {
+    orbitAz += vAz * dt;
+    const newEl = orbitEl + vEl * dt;
+    if (newEl <= EL_MIN)      { orbitEl = EL_MIN; vEl = 0; }
+    else if (newEl >= EL_MAX) { orbitEl = EL_MAX; vEl = 0; }
+    else                      { orbitEl = newEl; }
+    vAz *= Math.exp(-dt * DAMP);
+    vEl *= Math.exp(-dt * DAMP);
+    if (Math.abs(vAz) <= VEL_MIN) vAz = 0;
+    if (Math.abs(vEl) <= VEL_MIN) vEl = 0;
+    ramp = 0;
+    lastInput = now;
+    render();
+  } else if ((now - lastInput) / 1000 >= idleDelay) {
+    ramp = Math.min(ramp + dt / RAMP_TIME, 1);
+    const eased = ramp * ramp * (3 - 2 * ramp);
+    orbitAz -= rotSpeed * eased * dt;
+    render();
+  } else {
+    ramp = 0;
+  }
+  requestAnimationFrame(tick);
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  vAz = 0; vEl = 0;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = performance.now();
+  lastInput = lastMoveT;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const mt = performance.now();
+  const dtMove = Math.max((mt - lastMoveT) / 1000, 1e-3);
+  const dAz = -(e.clientX - prevX) * 0.008;
+  const newEl = orbitEl + (e.clientY - prevY) * 0.008;
+  const clampedEl = Math.max(EL_MIN, Math.min(EL_MAX, newEl));
+  const dEl = clampedEl - orbitEl;
+  orbitAz += dAz;
+  orbitEl = clampedEl;
+  vAz = dAz / dtMove;
+  vEl = dEl / dtMove;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = mt;
+  lastInput = mt;
+  render();
+});
+const endDrag = () => {
+  if (!dragging) return;
+  dragging = false;
+  if (performance.now() - lastMoveT > 100) { vAz = 0; vEl = 0; }
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointerleave', endDrag);
+
+window.addEventListener('resize', resize);
+if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
+
+// ---- init ----
+resize();
+requestAnimationFrame(tick);
+</script>
+
+</body>
+</html>
