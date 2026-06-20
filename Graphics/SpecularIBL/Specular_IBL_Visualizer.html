@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .spec-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .spec-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .spec-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    background: #404040;
+    touch-action: none;
+  }
+  .spec-vis canvas:active { cursor: grabbing; }
+  .spec-vis .controls {
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 88px 1fr 64px;
+    align-items: center;
+    gap: 12px 12px;
+    flex-shrink: 0;
+  }
+  .spec-vis .label { font-size: 15px; color: #444; }
+  .spec-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .spec-vis input[type=color] {
+    width: 100%;
+    height: 22px;
+    padding: 0;
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    background: none;
+    cursor: pointer;
+  }
+  .spec-vis input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 3px;
+    background: #d4d4d8;
+    border-radius: 2px;
+    outline: none;
+    margin: 0;
+    touch-action: pan-y;
+  }
+  .spec-vis input[type=range]::-webkit-slider-thumb,
+  .spec-vis input[type=range]::-moz-range-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #2052BB;
+    cursor: pointer;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="spec-vis">
+  <div class="canvas-wrap">
+    <canvas id="specCanvas"></canvas>
+  </div>
+  <div class="controls">
+    <div class="label">F0</div>
+    <input type="color" id="cPicker" value="#ffffff">
+    <div class="value" id="cVal">#FFFFFF</div>
+
+    <div class="label">Roughness</div>
+    <input type="range" id="rSlider" min="0" max="100" value="20">
+    <div class="value" id="rVal">0.20</div>
+  </div>
+</div>
+
+<script type="module">
+/*
+ * Specular IBL (split-sum) 시각화. prefiltered 환경 큐브맵(밉=러프니스) + environment BRDF LUT 로
+ * 구체를 셰이딩하고, 원본 환경(prefiltered mip0)을 배경으로 깔아 비교한다.
+ *
+ * 엔진 식과 동일:
+ *   R = reflect(-V, N);  PrefilterLod = Roughness * (MaxLod-1) = Roughness * 9
+ *   Prefiltered = EnvironmentPrefilter.SampleLevel(R, PrefilterLod).rgb
+ *   EnvBRDF     = EnvironmentBRDF.Sample(float2(NoV, Roughness)).rg   // scale, bias
+ *   F0          = 위젯 입력값 (Metallic = 1 가정, F0 = BaseColor)
+ *   spec        = Prefiltered * (F0 * EnvBRDF.x + EnvBRDF.y)
+ *
+ * 좌표계: 씬은 Unreal(X앞,Y오른,Z위). 큐브맵 파일명도 UE축(Zp=위 …). Three.js는 우수,
+ * 소스는 좌수라 좌우(Y)만 반전: cubeDir(v) = (v.x, -v.y, v.z). (디퓨즈 위젯과 동일)
+ * 큐브맵 PNG는 감마 2.2로 인코딩되어 저장(=표시값)이라 셰이더는 그대로 출력(런타임 감마 없음).
+ * 밴딩 방지를 위해 float EXR을 감마공간 8비트로 인코딩해 둠(Tools/encode_prefiltered_srgb.py).
+ * LUT는 선형 데이터(scale/bias)라 그대로 사용.
+ */
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+const PI = Math.PI;
+const MAX_LOD = 9.0;          // EnvPrefilterMaxLod(10) - 1
+const BASE_FOV = 40 * PI / 180;
+const CAM_DIST = 4.2;
+const GRID_C   = 0xe3e3e6;
+const GRID_MID = 0xd0d0d4;
+const AXIS_C   = 0x8a93a6;
+
+const canvas = document.getElementById('specCanvas');
+const cPicker = document.getElementById('cPicker');
+const rSlider = document.getElementById('rSlider');
+const cValEl = document.getElementById('cVal');
+const rValEl = document.getElementById('rVal');
+
+// ---- renderer / scene / camera ----
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setClearColor(0x404040, 1);
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
+camera.up.set(0, 0, 1);   // Z-up (Unreal)
+
+// ---- prefiltered 큐브맵 10개 밉 레벨 (각 레벨 = CubeTexture 1개) ----
+// CubeTextureLoader 순서 = [+X,-X,+Y,-Y,+Z,-Z], 파일명은 UE축. 저장값 그대로, 세로 안뒤집음.
+function loadCubeLevel(level) {
+  const tex = new THREE.CubeTextureLoader()
+    .setPath('./Prefiltered/')
+    .load([
+      'Xp_' + level + '.png', 'Xm_' + level + '.png',
+      'Yp_' + level + '.png', 'Ym_' + level + '.png',
+      'Zp_' + level + '.png', 'Zm_' + level + '.png',
+    ], () => render());
+  tex.colorSpace = THREE.LinearSRGBColorSpace;
+  tex.flipY = false;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  return tex;
+}
+const levels = [];
+for (let m = 0; m < 10; m++) levels.push(loadCubeLevel(m));
+
+// ---- environment BRDF LUT (2D, R=scale G=bias, 선형 데이터) ----
+const lutTex = new THREE.TextureLoader().load('./EnvironmentBRDF.png', () => render());
+lutTex.colorSpace = THREE.LinearSRGBColorSpace;   // 선형 데이터 (sRGB 디코딩 X)
+lutTex.flipY = false;                              // 행0 = roughness0 (엔진 UV와 일치)
+lutTex.minFilter = THREE.LinearFilter;
+lutTex.magFilter = THREE.LinearFilter;
+lutTex.wrapS = THREE.ClampToEdgeWrapping;
+lutTex.wrapT = THREE.ClampToEdgeWrapping;
+lutTex.generateMipmaps = false;
+
+// 공용 GLSL: 좌표 변환 (좌우 반전). PNG가 이미 감마공간이라 런타임 감마 없음.
+const CUBE_GLSL = `
+  vec3 cubeDir(vec3 v) { return vec3(v.x, -v.y, v.z); }   // UE축 그대로 + 좌우(Y) 반전(LH<->RH)
+`;
+
+// ---- 배경 스카이박스 (원본 환경 = prefiltered mip0) ----
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: { uEnv: { value: levels[0] } },
+  side: THREE.BackSide,
+  depthWrite: false,
+  vertexShader: `
+    varying vec3 vWorldPos;
+    void main() {
+      vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+    uniform samplerCube uEnv;
+    varying vec3 vWorldPos;
+    ${CUBE_GLSL}
+    void main() {
+      vec3 d = normalize(vWorldPos - cameraPosition);
+      gl_FragColor = vec4(textureCube(uEnv, cubeDir(d)).rgb, 1.0);
+    }
+  `,
+});
+const sky = new THREE.Mesh(new THREE.BoxGeometry(200, 200, 200), skyMat);
+sky.frustumCulled = false;
+sky.renderOrder = -1;
+scene.add(sky);
+
+// ---- 스페큘러 IBL 구체 ----
+const sphereUniforms = {
+  uLUT: { value: lutTex },
+  uF0: { value: new THREE.Color(1, 1, 1) },
+  uRough: { value: 0.2 },
+};
+for (let m = 0; m < 10; m++) sphereUniforms['uEnv' + m] = { value: levels[m] };
+
+const sphereMat = new THREE.ShaderMaterial({
+  uniforms: sphereUniforms,
+  vertexShader: `
+    varying vec3 vN;
+    varying vec3 vWorldPos;
+    void main() {
+      vN = normalize(mat3(modelMatrix) * normal);
+      vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+    uniform samplerCube uEnv0; uniform samplerCube uEnv1; uniform samplerCube uEnv2;
+    uniform samplerCube uEnv3; uniform samplerCube uEnv4; uniform samplerCube uEnv5;
+    uniform samplerCube uEnv6; uniform samplerCube uEnv7; uniform samplerCube uEnv8;
+    uniform samplerCube uEnv9;
+    uniform sampler2D uLUT;
+    uniform vec3 uF0;
+    uniform float uRough;
+    varying vec3 vN;
+    varying vec3 vWorldPos;
+    ${CUBE_GLSL}
+
+    // 정수 인덱스 대신 float 임계값으로 레벨 선택 (GLSL ES 1.0 호환)
+    vec3 sampleLevel(float i, vec3 d) {
+      if (i < 0.5) return textureCube(uEnv0, d).rgb;
+      else if (i < 1.5) return textureCube(uEnv1, d).rgb;
+      else if (i < 2.5) return textureCube(uEnv2, d).rgb;
+      else if (i < 3.5) return textureCube(uEnv3, d).rgb;
+      else if (i < 4.5) return textureCube(uEnv4, d).rgb;
+      else if (i < 5.5) return textureCube(uEnv5, d).rgb;
+      else if (i < 6.5) return textureCube(uEnv6, d).rgb;
+      else if (i < 7.5) return textureCube(uEnv7, d).rgb;
+      else if (i < 8.5) return textureCube(uEnv8, d).rgb;
+      else return textureCube(uEnv9, d).rgb;
+    }
+    // prefiltered 샘플 (인접 두 레벨 트라이리니어 보간)
+    vec3 prefiltered(vec3 d, float rough) {
+      float lod = clamp(rough, 0.0, 1.0) * ${MAX_LOD.toFixed(1)};
+      float l0 = floor(lod);
+      float f = lod - l0;
+      return mix(sampleLevel(l0, d), sampleLevel(min(l0 + 1.0, ${MAX_LOD.toFixed(1)}), d), f);
+    }
+
+    void main() {
+      vec3 N = normalize(vN);
+      vec3 V = normalize(cameraPosition - vWorldPos);
+      vec3 R = reflect(-V, N);
+      float NoV = max(dot(N, V), 0.0);
+
+      vec3 prefilteredColor = prefiltered(cubeDir(R), uRough);
+      vec2 envBRDF = texture2D(uLUT, vec2(NoV, uRough)).rg;   // scale, bias
+      vec3 spec = prefilteredColor * (uF0 * envBRDF.x + envBRDF.y);
+
+      gl_FragColor = vec4(spec, 1.0);
+    }
+  `,
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), sphereMat));
+
+// ---- 바닥 격자 (x-y 평면, z=0) + z축 선: UE 좌표 기준 방향 표시 ----
+const grid = new THREE.GridHelper(4, 8, GRID_MID, GRID_C);
+grid.rotation.x = PI / 2;
+scene.add(grid);
+scene.add(new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1.5),
+  ]),
+  new THREE.LineBasicMaterial({ color: AXIS_C })
+));
+
+// ---- 카메라 (구면 좌표: azimuth + elevation) ----
+let orbitAz = 0.6;
+let orbitEl = 0.35;
+const EL_MAX = 1.45, EL_MIN = -1.45;   // 위/아래 모두 (극점 직전까지; 그리드가 방향 기준)
+function updateCamera() {
+  const ce = Math.cos(orbitEl), se = Math.sin(orbitEl);
+  camera.position.set(
+    CAM_DIST * ce * Math.cos(orbitAz),
+    CAM_DIST * ce * Math.sin(orbitAz),
+    CAM_DIST * se
+  );
+  camera.lookAt(0, 0, 0);
+}
+
+function render() {
+  updateCamera();
+  renderer.render(scene, camera);
+}
+
+// ---- 컨트롤 ----
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+cPicker.addEventListener('input', () => {
+  const [r, g, b] = hexToRgb(cPicker.value);
+  sphereMat.uniforms.uF0.value.setRGB(r, g, b);
+  cValEl.textContent = cPicker.value.toUpperCase();
+  render();
+});
+rSlider.addEventListener('input', () => {
+  const r = +rSlider.value / 100;
+  sphereMat.uniforms.uRough.value = r;
+  rValEl.textContent = r.toFixed(2);
+  render();
+});
+
+// ---- 적응형 FOV resize ----
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(w, h, false);
+  const aspect = w / h;
+  camera.aspect = aspect;
+  const vfov = aspect >= 1 ? BASE_FOV : 2 * Math.atan(Math.tan(BASE_FOV / 2) / aspect);
+  camera.fov = vfov * 180 / PI;
+  camera.updateProjectionMatrix();
+  render();
+}
+
+// ---- 상시 rAF 루프: 드래그 / 2축 관성 / 유휴 시 azimuth 자동회전 (BRDF 시각화와 동일) ----
+const DAMP      = 10;
+const VEL_MIN   = 0.15;
+const idleDelay = 3.0;
+const rotSpeed  = 0.25;
+const RAMP_TIME = 1.5;
+
+let dragging = false, prevX = 0, prevY = 0, lastMoveT = 0;
+let vAz = 0, vEl = 0;
+let lastInput = -Infinity;
+let ramp = 0;
+let prevT = performance.now();
+
+function tick(now) {
+  const dt = Math.min((now - prevT) / 1000, 0.1);
+  prevT = now;
+  if (dragging) {
+    lastInput = now;
+    ramp = 0;
+  } else if (Math.abs(vAz) > VEL_MIN || Math.abs(vEl) > VEL_MIN) {
+    orbitAz += vAz * dt;
+    const newEl = orbitEl + vEl * dt;
+    if (newEl <= EL_MIN)      { orbitEl = EL_MIN; vEl = 0; }
+    else if (newEl >= EL_MAX) { orbitEl = EL_MAX; vEl = 0; }
+    else                      { orbitEl = newEl; }
+    vAz *= Math.exp(-dt * DAMP);
+    vEl *= Math.exp(-dt * DAMP);
+    if (Math.abs(vAz) <= VEL_MIN) vAz = 0;
+    if (Math.abs(vEl) <= VEL_MIN) vEl = 0;
+    ramp = 0;
+    lastInput = now;
+    render();
+  } else if ((now - lastInput) / 1000 >= idleDelay) {
+    ramp = Math.min(ramp + dt / RAMP_TIME, 1);
+    const eased = ramp * ramp * (3 - 2 * ramp);
+    orbitAz -= rotSpeed * eased * dt;
+    render();
+  } else {
+    ramp = 0;
+  }
+  requestAnimationFrame(tick);
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  vAz = 0; vEl = 0;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = performance.now();
+  lastInput = lastMoveT;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const mt = performance.now();
+  const dtMove = Math.max((mt - lastMoveT) / 1000, 1e-3);
+  const dAz = -(e.clientX - prevX) * 0.008;
+  const newEl = orbitEl + (e.clientY - prevY) * 0.008;
+  const clampedEl = Math.max(EL_MIN, Math.min(EL_MAX, newEl));
+  const dEl = clampedEl - orbitEl;
+  orbitAz += dAz;
+  orbitEl = clampedEl;
+  vAz = dAz / dtMove;
+  vEl = dEl / dtMove;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = mt;
+  lastInput = mt;
+  render();
+});
+const endDrag = () => {
+  if (!dragging) return;
+  dragging = false;
+  if (performance.now() - lastMoveT > 100) { vAz = 0; vEl = 0; }
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointerleave', endDrag);
+
+window.addEventListener('resize', resize);
+if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
+
+// ---- init ----
+resize();
+requestAnimationFrame(tick);
+</script>
+
+</body>
+</html>
