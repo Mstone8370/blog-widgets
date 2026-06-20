@@ -21,20 +21,23 @@ coord rule:
   -> {face}_{mip}.png   (e.g. Xp_0.png ... Zm_9.png)
 
 Notes: field/enum names can vary slightly between RenderDoc versions (use shell
-autocomplete). Save settings are left at defaults on purpose (same as manual save:
-float values clamp to [0,1], independent of the viewer's gamma/exposure), matching
-the widget's gamma-2.2 display pipeline.
+autocomplete). Save settings are left at defaults on purpose (same as manual save).
+With FILE_TYPE='hdr' (or 'exr') the float values are written un-clamped, so the
+widget loads true HDR via RGBELoader/EXRLoader (no LDR precision loss). 'png' still
+clamps to [0,1] 8-bit.
 """
 import os
 import renderdoc as rd
 
 # ---- config ----
 RESOURCE_ID = 0   # prefiltered cubemap ResourceId (number). 0 -> just print candidates and stop.
-# 'exr' = float (HDR, un-clamped) for a high-quality re-encode; 'png' = clamped 8-bit.
-FILE_TYPE = 'exr'
-# For FILE_TYPE='exr' dump to Prefiltered_src, then run encode_prefiltered_srgb.py
-# (venv) to make the sRGB 8-bit PNGs in Prefiltered. For 'png' point OUT_DIR at Prefiltered.
-OUT_DIR = r"C:\Users\mston\Desktop\Folder\blog-widgets\Graphics\SpecularIBL\Prefiltered_src"
+# 'hdr' = Radiance RGBE (HDR, compact, loads with RGBELoader)  <- recommended, no post-process.
+# 'exr' = float (HDR, larger) loads with EXRLoader.  'png' = clamped 8-bit (LDR, lossy).
+FILE_TYPE = 'hdr'
+# 'hdr'/'exr' go straight to the widget's texture folder (no re-encode step needed).
+# Point OUT_DIR at the widget's cubemap folder, e.g. .../DiffuseIBL/Irradiance or
+# .../SpecularIBL/Prefiltered.
+OUT_DIR = r"C:\Users\mston\Desktop\Folder\blog-widgets\Graphics\DiffuseIBL\Irradiance"
 MIP_COUNT = None  # None -> use the texture's actual mip count. Force with an int (e.g. 10).
 FACE_NAMES = ['Xp', 'Xm', 'Yp', 'Ym', 'Zp', 'Zm']   # slice 0..5 = +X,-X,+Y,-Y,+Z,-Z
 
@@ -72,7 +75,9 @@ def _dump(controller):
         for s in range(6):
             ts = rd.TextureSave()
             ts.resourceId = tex.resourceId   # use the real ResourceId object (int -> ResourceId is not allowed)
-            ts.destType = rd.FileType.EXR if FILE_TYPE == 'exr' else rd.FileType.PNG
+            ts.destType = {'hdr': rd.FileType.HDR,
+                           'exr': rd.FileType.EXR,
+                           'png': rd.FileType.PNG}[FILE_TYPE]
             ts.mip = m
             ts.slice.sliceIndex = s
             path = os.path.join(OUT_DIR, "%s_%d.%s" % (FACE_NAMES[s], m, FILE_TYPE))

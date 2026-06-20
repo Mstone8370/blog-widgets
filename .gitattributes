@@ -1,0 +1,8 @@
+# 바이너리 자산 — 줄바꿈(CRLF) 변환 금지 (변환 시 파일 손상)
+*.hdr binary
+*.exr binary
+*.png binary
+*.dds binary
+*.jpg binary
+*.jpeg binary
+*.woff2 binary

@@ -81,6 +81,14 @@
   </div>
 </div>
 
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
 <script type="module">
 /*
  * Diffuse IBL irradiance 큐브맵을 구체에 셰이딩하고, 원본 환경 큐브맵을 배경(스카이박스)으로
@@ -91,12 +99,13 @@
  *
  * 좌표계: 씬은 Unreal(X forward, Y right, Z up)로 배치. 큐브맵 파일명이 UE축과 일치하므로
  *   Xp=+X(앞), Xm=-X(뒤), Yp=+Y(오른), Ym=-Y(왼), Zp=+Z(위), Zm=-Z(아래).
- *   (CubeTextureLoader가 같은 글자 면에 로드 → UE 방향으로 그대로 샘플하면 같은 글자 면이 선택됨)
+ *   (면 순서 [+X,-X,+Y,-Y,+Z,-Z] 에 같은 글자 면을 로드 → UE 방향으로 그대로 샘플)
  * 단 Three.js는 우수좌표계, 소스는 좌수좌표계라 핸드니스가 달라 Y축만 반전한다:
  *   dir = (v.x, -v.y, v.z)  // 위/아래(Z)·앞/뒤(X)는 그대로, 좌우(Y)만 반전. 구체/배경 공용.
- * 저장값이 어둡게 들어와 감마 2.2로 보정(고정), 노출 1.0(고정).
+ * 텍스처는 HDR(.hdr) 선형값 → 표시 시 감마 2.2로 인코딩(고정), 노출 1.0(고정).
  */
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import * as THREE from 'three';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 const PI = Math.PI;
 const GAMMA = 2.2;            // 저장값이 어두워 밝게 보정 (고정)
@@ -121,21 +130,37 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
 camera.up.set(0, 0, 1);   // Z-up (Unreal)
 
-// ---- 큐브맵 로드 헬퍼 (저장값 그대로 샘플, 세로 뒤집지 않음) ----
-// CubeTextureLoader 순서 = [+X, -X, +Y, -Y, +Z, -Z] (GL/DX 면 순서와 동일)
-function loadCube(path) {
-  const tex = new THREE.CubeTextureLoader()
-    .setPath(path)
-    .load(['Xp.png', 'Xm.png', 'Yp.png', 'Ym.png', 'Zp.png', 'Zm.png'], () => render());
-  tex.colorSpace = THREE.LinearSRGBColorSpace;
-  tex.flipY = false;   // 큐브 면은 top-left 원점(D3D/표준 큐브 규약)
-  return tex;
-}
-const irradianceTex = loadCube('./Irradiance/');
-irradianceTex.minFilter = THREE.LinearFilter;
-irradianceTex.magFilter = THREE.LinearFilter;
-irradianceTex.generateMipmaps = false;
-const envTex = loadCube('./Cubemap/');   // 원본 환경맵(배경): 미세 디테일 위해 밉맵 사용
+// ---- 배경 = 원본 환경 큐브맵 (1024² gamma PNG, LDR) ----
+// 배경은 장식용이라 정밀도 불필요 → LDR. PNG 는 gamma 공간으로 저장(=표시값)이라
+// 스카이박스 셰이더는 raw 출력(런타임 감마 없음). 면 순서 = [+X,-X,+Y,-Y,+Z,-Z].
+const envTex = new THREE.CubeTextureLoader()
+  .setPath('./Cubemap/')
+  .load(['Xp.png', 'Xm.png', 'Yp.png', 'Ym.png', 'Zp.png', 'Zm.png'], () => render());
+envTex.colorSpace = THREE.LinearSRGBColorSpace;   // 저장값 그대로 (sRGB 디코딩 X)
+envTex.flipY = false;
+
+// ---- 구체 = irradiance 큐브맵 (HDR) ----
+// .hdr(RGBE) 6면 → half-float CubeTexture. 값 양자화/밴딩 없음. 데이터 텍스처는 flipY
+// 미적용이나 RGBE 스캔라인 순서가 PNG(flipY=false)와 동일(행0=위)이라 cubeDir 규칙 유지.
+const rgbeLoader = new RGBELoader().setDataType(THREE.HalfFloatType);
+const IRR_FACES = ['Xp_0.hdr', 'Xm_0.hdr', 'Yp_0.hdr', 'Ym_0.hdr', 'Zp_0.hdr', 'Zm_0.hdr'];
+
+Promise.all(IRR_FACES.map(f => rgbeLoader.loadAsync('./Irradiance/' + f)))
+  .then((texs) => {
+    // DataTexture 객체 6개를 그대로 전달 → Three 가 image[i].isDataTexture 를 보고
+    // 데이터 업로드 경로를 탄다 (image 만 넘기면 DOM용 texSubImage2D 오버로드로 실패).
+    const cube = new THREE.CubeTexture(texs);
+    cube.type = THREE.HalfFloatType;
+    cube.format = THREE.RGBAFormat;
+    cube.colorSpace = THREE.LinearSRGBColorSpace;
+    cube.minFilter = THREE.LinearFilter;
+    cube.magFilter = THREE.LinearFilter;
+    cube.generateMipmaps = false;
+    cube.needsUpdate = true;
+    sphereMat.uniforms.uIrradiance.value = cube;
+    render();
+  })
+  .catch((err) => console.error('HDR irradiance load failed:', err));
 
 // 공용 좌표 변환(UE축 재배치 + Y반전) + 감마. 좌우/앞뒤 뒤집혀 보이면 여기 한 곳만 조정.
 const CUBE_GLSL = `
@@ -145,7 +170,7 @@ const CUBE_GLSL = `
 
 // ---- 배경 스카이박스 (원본 환경맵) ----
 const skyMat = new THREE.ShaderMaterial({
-  uniforms: { uEnv: { value: envTex } },
+  uniforms: { uEnv: { value: envTex } },   // gamma PNG (저장값 = 표시값)
   side: THREE.BackSide,
   depthWrite: false,
   vertexShader: `
@@ -162,7 +187,7 @@ const skyMat = new THREE.ShaderMaterial({
     ${CUBE_GLSL}
     void main() {
       vec3 d = normalize(vWorldPos - cameraPosition);
-      gl_FragColor = vec4(gammaEnc(textureCube(uEnv, cubeDir(d)).rgb), 1.0);
+      gl_FragColor = vec4(textureCube(uEnv, cubeDir(d)).rgb, 1.0);   // gamma PNG = raw 출력
     }
   `,
 });
@@ -174,7 +199,7 @@ scene.add(sky);
 // ---- irradiance 구체 ----
 const sphereMat = new THREE.ShaderMaterial({
   uniforms: {
-    uIrradiance: { value: irradianceTex },
+    uIrradiance: { value: null },   // HDR 큐브맵 로드 완료 시 주입
     uDiffuseColor: { value: new THREE.Color(1, 1, 1) },
   },
   vertexShader: `
