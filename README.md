@@ -1,5 +1,30 @@
 # blog-widgets
 
+## 시각화 목록
+
+### PBR · BRDF
+- [D GGX](https://mstone8370.github.io/blog-widgets/Graphics/PBR/D_GGX_Visualizer.html)
+- [F Schlick](https://mstone8370.github.io/blog-widgets/Graphics/PBR/F_Schlick_Visualizer.html)
+- [G Smith](https://mstone8370.github.io/blog-widgets/Graphics/PBR/G_Smith_Visualizer.html)
+- [V Smith](https://mstone8370.github.io/blog-widgets/Graphics/PBR/V_Smith_Visualizer.html)
+- [Specular BRDF](https://mstone8370.github.io/blog-widgets/Graphics/PBR/Specular_BRDF_Visualizer.html)
+- [Diffuse](https://mstone8370.github.io/blog-widgets/Graphics/PBR/Diffuse_Visualizer.html)
+- [PBR](https://mstone8370.github.io/blog-widgets/Graphics/PBR/PBR_Visualizer.html)
+- [Single Scattering](https://mstone8370.github.io/blog-widgets/Graphics/PBR/Single_Scattering_Visualizer.html)
+- [Multi Scattering](https://mstone8370.github.io/blog-widgets/Graphics/PBR/Multi_Scattering_Visualizer.html)
+
+### Diffuse IBL
+- [Cosine Sampling](https://mstone8370.github.io/blog-widgets/Graphics/DiffuseIBL/Cosine_Sampling_Visualizer.html)
+- [Irradiance Map](https://mstone8370.github.io/blog-widgets/Graphics/DiffuseIBL/Irradiance_Sphere_Visualizer.html)
+- [SH Irradiance](https://mstone8370.github.io/blog-widgets/Graphics/DiffuseIBL/SH_Irradiance_Visualizer.html)
+
+### Specular IBL · 샘플링
+- [Monte Carlo](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Monte_Carlo_Visualizer.html)
+- [Monte Carlo (Hammersley)](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Monte_Carlo_Hammersley_Visualizer.html)
+- [GGX Sampling](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/GGX_Sampling_Visualizer.html)
+- [BRDF Lobe](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/BRDF_Lobe_Visualizer.html)
+- [Specular IBL](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Specular_IBL_Visualizer.html)
+
 ## 사용 방법
  
 각 위젯은 독립적인 HTML 파일이며, GitHub Pages로 호스팅되어 `iframe`을 통해 블로그에 임베드됨
@@ -9,9 +34,7 @@
 
 ```html
 <div style="max-width: 500px; aspect-ratio: 5/6; margin: 0 auto;">
-  <iframe src="https://mstone8370.github.io/blog-widgets/경로/위젯파일.html"
-          width="500" height="600"
-          frameborder="0">
+  <iframe src="https://mstone8370.github.io/blog-widgets/경로/위젯파일.html" frameborder="0">
   </iframe>
 </div>
 <style>
