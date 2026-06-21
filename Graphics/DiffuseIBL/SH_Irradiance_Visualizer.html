@@ -132,6 +132,7 @@
  */
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { SH_DIFFUSE_COEFFS } from './sh_coeffs.js';
 
 const PI = Math.PI;
 const GAMMA = 2.2;
@@ -141,18 +142,8 @@ const GRID_C   = 0xe3e3e6;
 const GRID_MID = 0xd0d0d4;
 const AXIS_C   = 0x8a93a6;
 
-// 이 환경(이미지)에 맞는 SH 계수 9개 (RGB). 엔진 SphericalHarmonicsFromHDRI 결과.
-const SH_COEFFS = [
-  [ 2.06894,    1.6961,     1.38278   ],
-  [ 0.24717,    0.210399,   0.221209  ],
-  [ 0.00561719, 0.139907,   0.123811  ],
-  [ 0.527012,   0.649308,   0.728762  ],
-  [-0.00848533, 0.0160411,  0.0357868 ],
-  [-0.0439908, -0.011924,  -0.00426112],
-  [-0.0749898, -0.157596,  -0.191435  ],
-  [ 0.174448,   0.138408,   0.133159  ],
-  [ 0.0560221,  0.0511187,  0.0539518 ],
-].map(c => new THREE.Vector3(c[0], c[1], c[2]));
+// 이 환경(이미지)에 맞는 SH 계수 9개 (RGB). 공유 파일(sh_coeffs.js)에서 가져온다.
+const SH_COEFFS = SH_DIFFUSE_COEFFS.map(c => new THREE.Vector3(c[0], c[1], c[2]));
 
 const canvas = document.getElementById('shCanvas');
 const cPicker = document.getElementById('cPicker');

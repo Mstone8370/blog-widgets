@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .shr-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .shr-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .shr-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    background: #fdfdfd;
+    touch-action: none;
+  }
+  .shr-vis canvas:active { cursor: grabbing; }
+
+  .shr-vis .legend {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    font-size: 13px;
+    color: #666;
+    background: rgba(255, 255, 255, 0.78);
+    border: 1px solid #ececec;
+    border-radius: 4px;
+    padding: 5px 8px;
+    line-height: 1.55;
+    pointer-events: none;
+  }
+  .shr-vis .legend .pos { color: #ff1626; font-weight: 600; }
+  .shr-vis .legend .neg { color: #1567ff; font-weight: 600; }
+  .shr-vis .legend .sel { color: #2052BB; font-weight: 600; }
+
+  .shr-vis .controls {
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 96px 1fr 56px;
+    align-items: center;
+    gap: 10px 12px;
+    flex-shrink: 0;
+  }
+  .shr-vis .label { font-size: 15px; color: #444; }
+  .shr-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .shr-vis input[type=range] {
+    width: 100%;
+    accent-color: #2052BB;
+  }
+  .shr-vis .segment {
+    grid-column: 1 / -1;
+    display: flex;
+    border: 1px solid #d4d4d8;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .shr-vis .segment button {
+    flex: 1;
+    border: none;
+    border-right: 1px solid #e3e3e6;
+    background: #fff;
+    padding: 7px 4px;
+    font-family: 'SUIT', sans-serif;
+    font-size: 14px;
+    color: #555;
+    cursor: pointer;
+  }
+  .shr-vis .segment button:last-child { border-right: none; }
+  .shr-vis .segment button.active { background: #2052BB; color: #fff; }
+</style>
+</head>
+<body>
+
+<div class="shr-vis">
+  <div class="canvas-wrap">
+    <canvas id="shrCanvas"></canvas>
+    <div class="legend">
+      <span id="colorInfo">구 표면 색: <span class="pos">양수 +</span> · <span class="neg">음수 −</span></span><br>
+      <span class="sel" id="selInfo">밴드별 · 기저 · l = 2</span>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="label">밴드 <i>l</i></div>
+    <input type="range" id="bandSlider" min="0" max="2" step="1" value="2">
+    <div class="value" id="bandVal">2</div>
+
+    <div class="segment" id="modeSeg">
+      <button data-mode="band" class="active">밴드별</button>
+      <button data-mode="cumulative">누적</button>
+    </div>
+    <div class="segment" id="coeffSeg">
+      <button data-coeff="basis" class="active">기저</button>
+      <button data-coeff="ibl">IBL 계수</button>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+/*
+ * 하나의 구 표면에 SH(구면 조화)의 "밴드별 주파수"를 보여준다. 밴드 0..2(3개) 사용.
+ * 두 개의 토글로 4가지를 조합:
+ *   [밴드별 | 누적]   : 선택 밴드 l 만 / 0..l 합
+ *   [기저 | IBL 계수] : 단위 계수(=순수 기저) / diffuse IBL 의 SH 계수(sh_coeffs.js 공유)
+ *
+ * 표시값 f(n): 위 선택에 따른 SH 합을 구 전체 |최댓값|으로 정규화한 부호값.
+ *   - 기저: 계수 = 1 (Σ_m Y_l^m). 밴드가 올라갈수록 표면 진동(각주파수)이 많아진다.
+ *   - IBL: 계수 = SH_DIFFUSE_COEFFS[idx] (RGB). 그 휘도를 부호 스칼라로 사용 → 실제 환경광이
+ *          각 주파수 대역에 얼마나 들어있는지. 누적이 band 2 에서 diffuse irradiance(저주파)로 수렴.
+ *   색: 양수 빨강 / 음수 파랑 (4모드 동일 기준). idx(l,m) = l*l + (m+l).
+ *
+ * 좌표계: Unreal(X앞, Y오른, Z위). SH 천정축 = Z(드러난 z축 선과 일치). 바닥 격자 = xy 평면.
+ * 카메라/그리드/축·FOV·거리는 diffuse IBL 시각화들과 동일(오빗 카메라, dist 4.2, fov 40).
+ * Three.js(0.160).
+ */
+import * as THREE from 'three';
+import { SH_DIFFUSE_COEFFS } from '../DiffuseIBL/sh_coeffs.js';
+
+const PI = Math.PI;
+const BASE_FOV = 40 * PI / 180;
+const CAM_DIST = 4.2;
+const R = 1.0;              // 구 반지름 (diffuse IBL 위젯과 동일)
+const DETAIL = 6;          // IcosahedronGeometry 세분
+const MAX_BAND = 2;        // 밴드 0..2 (계수 9개)
+const GRID_C   = 0xe3e3e6;
+const GRID_MID = 0xd0d0d4;
+const AXIS_C   = 0x8a93a6;
+
+const canvas = document.getElementById('shrCanvas');
+const bandSlider = document.getElementById('bandSlider');
+const bandVal = document.getElementById('bandVal');
+const modeSeg = document.getElementById('modeSeg');
+const coeffSeg = document.getElementById('coeffSeg');
+const selInfo = document.getElementById('selInfo');
+const colorInfo = document.getElementById('colorInfo');
+
+// 현재 선택 상태
+let band = 2;
+let mode = 'band';      // 'band' | 'cumulative'
+let coeff = 'basis';    // 'basis' | 'ibl'
+
+// ---- 실수 구면조화 기저 Y_l^m (정규화 상수 포함, l=0..2) ----
+function shBasis(l, m, x, y, z) {
+  const x2 = x * x, y2 = y * y, z2 = z * z;
+  switch (l) {
+    case 0:
+      return 0.282095;
+    case 1:
+      if (m === -1) return 0.488603 * y;
+      if (m === 0)  return 0.488603 * z;
+      return 0.488603 * x;
+    case 2:
+      if (m === -2) return 1.092548 * x * y;
+      if (m === -1) return 1.092548 * y * z;
+      if (m === 0)  return 0.315392 * (3.0 * z2 - 1.0);
+      if (m === 1)  return 1.092548 * x * z;
+      return 0.546274 * (x2 - y2);
+  }
+  return 0.0;
+}
+
+function bandLo() { return (mode === 'cumulative') ? 0 : band; }
+
+// 기저(단위 계수) 표시값: Σ_m Y_l^m  (부호 스칼라)
+function fieldBasis(x, y, z) {
+  let f = 0.0;
+  for (let l = bandLo(); l <= band; l++) {
+    for (let m = -l; m <= l; m++) f += shBasis(l, m, x, y, z);
+  }
+  return f;
+}
+
+// IBL 계수 표시값: Σ_m c_l^m·Y_l^m  (선형 RGB = E/π). out[0..2] 에 누적
+function fieldRGB(x, y, z, out) {
+  let r = 0.0, g = 0.0, b = 0.0;
+  for (let l = bandLo(); l <= band; l++) {
+    for (let m = -l; m <= l; m++) {
+      const B = shBasis(l, m, x, y, z);
+      const c = SH_DIFFUSE_COEFFS[l * l + (m + l)];
+      r += c[0] * B; g += c[1] * B; b += c[2] * B;
+    }
+  }
+  out[0] = r; out[1] = g; out[2] = b;
+}
+
+// ---- renderer / scene / camera ----
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setClearColor(0xfdfdfd, 1);
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
+camera.up.set(0, 0, 1);   // Z-up (Unreal)
+
+// ---- 조명 (입체감은 살리되 채도를 잃지 않도록 ambient 강하게) ----
+scene.add(new THREE.AmbientLight(0xffffff, 0.92));
+const dir = new THREE.DirectionalLight(0xffffff, 0.32);
+dir.position.set(3, -2, 4);
+scene.add(dir);
+
+// ---- 색 매핑: 0 부근 중립 → 양수 빨강 / 음수 파랑 ----
+const NEUTRAL = new THREE.Color(0.97, 0.97, 0.97);
+const POS = new THREE.Color('#ff1626');
+const NEG = new THREE.Color('#1567ff');
+const _c = new THREE.Color();
+function colorInto(arr, i, t) {            // t ∈ [-1, 1]
+  const a = Math.pow(Math.abs(t), 0.5);
+  _c.copy(NEUTRAL).lerp(t >= 0 ? POS : NEG, a);
+  arr[i] = _c.r; arr[i + 1] = _c.g; arr[i + 2] = _c.b;
+}
+
+// ---- 구 (한 개). 정점 방향은 고정, 색만 재계산 ----
+const geo = new THREE.IcosahedronGeometry(R, DETAIL);
+const posAttr = geo.attributes.position;
+const N = posAttr.count;
+const dirs = new Float32Array(N * 3);     // 단위 방향(고정)
+for (let i = 0; i < N; i++) {
+  dirs[i * 3] = posAttr.getX(i) / R;
+  dirs[i * 3 + 1] = posAttr.getY(i) / R;
+  dirs[i * 3 + 2] = posAttr.getZ(i) / R;
+}
+const colArr = new Float32Array(N * 3);
+geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+// 기저: 입체 음영(Lambert) / IBL: 실제 색을 그대로 보이게 무광(Basic). coeff 에 따라 교체.
+const matLit = new THREE.MeshLambertMaterial({ vertexColors: true });
+const matFlat = new THREE.MeshBasicMaterial({ vertexColors: true });
+const sphere = new THREE.Mesh(geo, matLit);
+scene.add(sphere);
+
+const _rgb = [0, 0, 0];
+// 선택 상태로 정점 색 재계산
+function recolor() {
+  if (coeff === 'ibl') {
+    // 실제 diffuse IBL 색: 선형 E/π 를 그대로 정점색에 넣고(음수→0 클램프),
+    // 렌더러 색관리(SRGB 출력)가 감마 인코딩 → diffuse IBL 구와 동일한 색.
+    for (let i = 0; i < N; i++) {
+      fieldRGB(dirs[i * 3], dirs[i * 3 + 1], dirs[i * 3 + 2], _rgb);
+      colArr[i * 3]     = Math.max(_rgb[0], 0);
+      colArr[i * 3 + 1] = Math.max(_rgb[1], 0);
+      colArr[i * 3 + 2] = Math.max(_rgb[2], 0);
+    }
+  } else {
+    // 기저: 부호 빨강/파랑, 구 전체 |최댓값|으로 정규화
+    const fs = new Float32Array(N);
+    let maxAbs = 1e-8;
+    for (let i = 0; i < N; i++) {
+      const f = fieldBasis(dirs[i * 3], dirs[i * 3 + 1], dirs[i * 3 + 2]);
+      fs[i] = f;
+      const a = Math.abs(f);
+      if (a > maxAbs) maxAbs = a;
+    }
+    for (let i = 0; i < N; i++) colorInto(colArr, i * 3, fs[i] / maxAbs);
+  }
+  geo.attributes.color.needsUpdate = true;
+}
+
+function updateSelInfo() {
+  const modeTxt = mode === 'band' ? '밴드별  ·  l = ' + band
+                                  : '누적  ·  l = 0 … ' + band;
+  selInfo.textContent = modeTxt + '  ·  ' + (coeff === 'basis' ? '기저(단위계수)' : 'IBL 계수');
+  colorInfo.innerHTML = coeff === 'ibl'
+    ? '구 표면 색: 실제 diffuse IBL irradiance · 음수 성분은 검정'
+    : '구 표면 색: <span class="pos">양수 +</span> · <span class="neg">음수 −</span>';
+}
+
+// ---- 바닥 격자 (x-y 평면, z=0) + z축 선: diffuse IBL 위젯과 동일 ----
+const grid = new THREE.GridHelper(4, 8, GRID_MID, GRID_C);
+grid.rotation.x = PI / 2;
+scene.add(grid);
+scene.add(new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1.5),
+  ]),
+  new THREE.LineBasicMaterial({ color: AXIS_C })
+));
+
+// ---- 카메라 (구면 좌표: azimuth + elevation), diffuse IBL 위젯과 동일 ----
+let orbitAz = 0.6;
+let orbitEl = 0.35;
+const EL_MAX = 1.45, EL_MIN = -1.45;
+function updateCamera() {
+  const ce = Math.cos(orbitEl), se = Math.sin(orbitEl);
+  camera.position.set(
+    CAM_DIST * ce * Math.cos(orbitAz),
+    CAM_DIST * ce * Math.sin(orbitAz),
+    CAM_DIST * se
+  );
+  camera.lookAt(0, 0, 0);
+}
+
+function render() {
+  updateCamera();
+  renderer.render(scene, camera);
+}
+
+// ---- 컨트롤 ----
+function refresh() {
+  sphere.material = (coeff === 'ibl') ? matFlat : matLit;
+  recolor();
+  updateSelInfo();
+  render();
+}
+
+bandSlider.addEventListener('input', () => {
+  band = parseInt(bandSlider.value, 10);
+  bandVal.textContent = band;
+  refresh();
+});
+modeSeg.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  modeSeg.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+  btn.classList.add('active');
+  mode = btn.dataset.mode;
+  refresh();
+});
+coeffSeg.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  coeffSeg.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+  btn.classList.add('active');
+  coeff = btn.dataset.coeff;
+  refresh();
+});
+
+// ---- 적응형 FOV resize (diffuse IBL 위젯과 동일) ----
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(w, h, false);
+  const aspect = w / h;
+  camera.aspect = aspect;
+  const vfov = aspect >= 1 ? BASE_FOV : 2 * Math.atan(Math.tan(BASE_FOV / 2) / aspect);
+  camera.fov = vfov * 180 / PI;
+  camera.updateProjectionMatrix();
+  render();
+}
+
+// ---- 상시 rAF 루프: 드래그 / 2축 관성 / 유휴 시 azimuth 자동회전 (diffuse IBL 위젯과 동일) ----
+const DAMP      = 10;
+const VEL_MIN   = 0.15;
+const idleDelay = 3.0;
+const rotSpeed  = 0.25;
+const RAMP_TIME = 1.5;
+
+let dragging = false, prevX = 0, prevY = 0, lastMoveT = 0;
+let vAz = 0, vEl = 0;
+let lastInput = -Infinity;
+let ramp = 0;
+let prevT = performance.now();
+
+function tick(now) {
+  const dt = Math.min((now - prevT) / 1000, 0.1);
+  prevT = now;
+  if (dragging) {
+    lastInput = now;
+    ramp = 0;
+  } else if (Math.abs(vAz) > VEL_MIN || Math.abs(vEl) > VEL_MIN) {
+    orbitAz += vAz * dt;
+    const newEl = orbitEl + vEl * dt;
+    if (newEl <= EL_MIN)      { orbitEl = EL_MIN; vEl = 0; }
+    else if (newEl >= EL_MAX) { orbitEl = EL_MAX; vEl = 0; }
+    else                      { orbitEl = newEl; }
+    vAz *= Math.exp(-dt * DAMP);
+    vEl *= Math.exp(-dt * DAMP);
+    if (Math.abs(vAz) <= VEL_MIN) vAz = 0;
+    if (Math.abs(vEl) <= VEL_MIN) vEl = 0;
+    ramp = 0;
+    lastInput = now;
+    render();
+  } else if ((now - lastInput) / 1000 >= idleDelay) {
+    ramp = Math.min(ramp + dt / RAMP_TIME, 1);
+    const eased = ramp * ramp * (3 - 2 * ramp);
+    orbitAz -= rotSpeed * eased * dt;
+    render();
+  } else {
+    ramp = 0;
+  }
+  requestAnimationFrame(tick);
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  vAz = 0; vEl = 0;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = performance.now();
+  lastInput = lastMoveT;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const mt = performance.now();
+  const dtMove = Math.max((mt - lastMoveT) / 1000, 1e-3);
+  const dAz = -(e.clientX - prevX) * 0.008;
+  const newEl = orbitEl + (e.clientY - prevY) * 0.008;
+  const clampedEl = Math.max(EL_MIN, Math.min(EL_MAX, newEl));
+  const dEl = clampedEl - orbitEl;
+  orbitAz += dAz;
+  orbitEl = clampedEl;
+  vAz = dAz / dtMove;
+  vEl = dEl / dtMove;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = mt;
+  lastInput = mt;
+  render();
+});
+const endDrag = () => {
+  if (!dragging) return;
+  dragging = false;
+  if (performance.now() - lastMoveT > 100) { vAz = 0; vEl = 0; }
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointerleave', endDrag);
+
+window.addEventListener('resize', resize);
+if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
+
+// ---- init ----
+refresh();
+resize();
+requestAnimationFrame(tick);
+</script>
+
+</body>
+</html>

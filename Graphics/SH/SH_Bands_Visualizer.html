@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .shb-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .shb-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .shb-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    background: #fdfdfd;
+    touch-action: none;
+  }
+  .shb-vis canvas:active { cursor: grabbing; }
+
+  .shb-vis .legend {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    font-size: 13px;
+    color: #666;
+    background: rgba(255, 255, 255, 0.78);
+    border: 1px solid #ececec;
+    border-radius: 4px;
+    padding: 5px 8px;
+    line-height: 1.5;
+    pointer-events: none;
+  }
+  .shb-vis .legend .pos { color: #ff1626; font-weight: 600; }
+  .shb-vis .legend .neg { color: #1567ff; font-weight: 600; }
+
+  .shb-vis .controls {
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 96px 1fr 56px;
+    align-items: center;
+    gap: 12px 12px;
+    flex-shrink: 0;
+  }
+  .shb-vis .label { font-size: 15px; color: #444; }
+  .shb-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .shb-vis input[type=range] {
+    width: 100%;
+    accent-color: #2052BB;
+  }
+  .shb-vis .reset {
+    grid-column: 1 / -1;
+    justify-self: start;
+    border: 1px solid #d4d4d8;
+    border-radius: 6px;
+    background: #fff;
+    padding: 7px 16px;
+    font-family: 'SUIT', sans-serif;
+    font-size: 14px;
+    color: #555;
+    cursor: pointer;
+  }
+  .shb-vis .reset:hover { background: #f3f4f6; }
+  .shb-vis .reset:active { background: #e9eaee; }
+</style>
+</head>
+<body>
+
+<div class="shb-vis">
+  <div class="canvas-wrap">
+    <canvas id="shbCanvas"></canvas>
+    <div class="legend">
+      행 = 밴드 <i>l</i> = 0 … 3 (아래로 갈수록 고주파)<br>
+      구 표면 색: <span class="pos">양수 +</span> · <span class="neg">음수 −</span>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="label">변형 (lobe)</div>
+    <input type="range" id="defSlider" min="0" max="1" step="0.01" value="0">
+    <div class="value" id="defVal">0.00</div>
+
+    <button type="button" id="resetBtn" class="reset">회전 초기화</button>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+/*
+ * 구면 조화(Spherical Harmonics) 기저함수 Y_l^m 를 밴드별로 시각화.
+ * 표준 SH 삼각형 배치: 행 = 밴드 l(0이 맨 위), 행 안에서 m = -l..l 로 좌우 정렬.
+ * 각 구의 표면 색이 그 방향에서의 Y_l^m 값(양수 빨강 / 음수 파랑)을 나타내며,
+ * 아래 밴드일수록 표면의 진동(=각주파수)이 많아진다 → "밴드별 주파수 대역".
+ *
+ * 색은 함수별 |최대값|으로 정규화(계수 자체는 색에 영향 없음). "변형" 슬라이더로
+ * 구를 |Y| 비례 반지름의 로브(lobe) 형태로 모핑해 노드(0이 되는 면)를 직관적으로 본다.
+ *
+ * 좌표계: Unreal(X앞, Y오른, Z위). SH 천정축 = Z(up), zonal m=0 = (3Z²-1) 등.
+ *   배치 평면은 Y(가로) × Z(세로), 카메라는 +X 쪽에서 원점을 바라본다.
+ * 배경은 흰색. Three.js(0.160) 사용.
+ */
+import * as THREE from 'three';
+
+const PI = Math.PI;
+const BASE_FOV = 40 * PI / 180;
+const MAX_BAND = 3;           // 밴드 0..3 고정 (l=0,1,2,3 → 16개 구)
+const R = 0.9;                 // 구 반지름
+const DETAIL = 6;             // IcosahedronGeometry 세분(매끈한 실루엣 + 고밴드 진동)
+const COL_SPACING = 2.3;      // m 방향(가로) 간격
+const ROW_SPACING = 2.3;      // 밴드 방향(세로) 간격
+
+const canvas = document.getElementById('shbCanvas');
+const defSlider = document.getElementById('defSlider');
+const defVal = document.getElementById('defVal');
+const resetBtn = document.getElementById('resetBtn');
+
+// ---- 실수 구면조화 기저 Y_l^m (정규화 상수 포함, l=0..4) ----
+// (정규화 상수는 색/변형에서 함수별로 다시 정규화되므로 부호·형상만 의미가 있다)
+function shBasis(l, m, x, y, z) {
+  const x2 = x * x, y2 = y * y, z2 = z * z;
+  switch (l) {
+    case 0:
+      return 0.282095;
+    case 1:
+      if (m === -1) return 0.488603 * y;
+      if (m === 0)  return 0.488603 * z;
+      return 0.488603 * x;                          // m=1
+    case 2:
+      if (m === -2) return 1.092548 * x * y;
+      if (m === -1) return 1.092548 * y * z;
+      if (m === 0)  return 0.315392 * (3.0 * z2 - 1.0);
+      if (m === 1)  return 1.092548 * x * z;
+      return 0.546274 * (x2 - y2);                  // m=2
+    case 3:
+      if (m === -3) return 0.590044 * y * (3.0 * x2 - y2);
+      if (m === -2) return 2.890611 * x * y * z;
+      if (m === -1) return 0.457046 * y * (5.0 * z2 - 1.0);
+      if (m === 0)  return 0.373176 * z * (5.0 * z2 - 3.0);
+      if (m === 1)  return 0.457046 * x * (5.0 * z2 - 1.0);
+      if (m === 2)  return 1.445306 * z * (x2 - y2);
+      return 0.590044 * x * (x2 - 3.0 * y2);        // m=3
+    case 4:
+      if (m === -4) return 2.503343 * x * y * (x2 - y2);
+      if (m === -3) return 1.770131 * y * z * (3.0 * x2 - y2);
+      if (m === -2) return 0.946175 * x * y * (7.0 * z2 - 1.0);
+      if (m === -1) return 0.669047 * y * z * (7.0 * z2 - 3.0);
+      if (m === 0)  return 0.105786 * (35.0 * z2 * z2 - 30.0 * z2 + 3.0);
+      if (m === 1)  return 0.669047 * x * z * (7.0 * z2 - 3.0);
+      if (m === 2)  return 0.473087 * (x2 - y2) * (7.0 * z2 - 1.0);
+      if (m === 3)  return 1.770131 * x * z * (x2 - 3.0 * y2);
+      return 0.625836 * (x2 * x2 - 6.0 * x2 * y2 + y2 * y2); // m=4
+  }
+  return 0.0;
+}
+
+// ---- renderer / scene / camera ----
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setClearColor(0xfdfdfd, 1);
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
+camera.up.set(0, 0, 1);   // Z-up (Unreal)
+
+// ---- 조명 (입체감은 살리되 채도를 잃지 않도록 ambient 강하게) ----
+scene.add(new THREE.AmbientLight(0xffffff, 0.92));
+const dir = new THREE.DirectionalLight(0xffffff, 0.32);
+dir.position.set(3, -2, 4);
+scene.add(dir);
+
+// ---- 색 매핑: 0 부근 중립 → 양수 빨강 / 음수 파랑 (선명하게) ----
+// 채도 향상: (1) 끝점 색을 진하고 선명하게, (2) 중립을 거의 흰색으로,
+// (3) alpha = |t|^0.5 로 중간값에서도 색이 빨리 짙어지게.
+const NEUTRAL = new THREE.Color(0.97, 0.97, 0.97);
+const POS = new THREE.Color('#ff1626');   // 선명한 빨강
+const NEG = new THREE.Color('#1567ff');   // 선명한 파랑
+function colorFor(t) {                 // t ∈ [-1, 1]
+  const a = Math.pow(Math.abs(t), 0.5);
+  const c = NEUTRAL.clone();
+  return t >= 0 ? c.lerp(POS, a) : c.lerp(NEG, a);
+}
+
+// ---- SH 구 / 라벨 그룹 ----
+const shGroup = new THREE.Group();
+scene.add(shGroup);
+const shMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+
+// 콘텐츠(삼각형 + 라벨) 의 월드 범위. build() 에서 갱신, resize 의 fit 에 사용.
+let halfContentW = 9, halfContentH = 5, contentCenterY = 0;
+
+function makeSphere(l, m) {
+  const geo = new THREE.IcosahedronGeometry(R, DETAIL);
+  const pos = geo.attributes.position;
+  const n = pos.count;
+  const dirs = new Float32Array(n * 3);
+  const ys = new Float32Array(n);
+  let maxAbs = 1e-8;
+  for (let i = 0; i < n; i++) {
+    const x = pos.getX(i) / R, y = pos.getY(i) / R, z = pos.getZ(i) / R;
+    dirs[i * 3] = x; dirs[i * 3 + 1] = y; dirs[i * 3 + 2] = z;
+    const v = shBasis(l, m, x, y, z);
+    ys[i] = v;
+    if (Math.abs(v) > maxAbs) maxAbs = Math.abs(v);
+  }
+  const col = new Float32Array(n * 3);
+  const absn = new Float32Array(n);     // |Y|/maxAbs, 변형(로브 반지름)용
+  for (let i = 0; i < n; i++) {
+    const t = ys[i] / maxAbs;
+    absn[i] = Math.abs(t);
+    const c = colorFor(t);
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const mesh = new THREE.Mesh(geo, shMat);
+  mesh.userData = { dirs, absn };
+  return mesh;
+}
+
+// 카메라를 향하는 스프라이트 텍스트 라벨 (밴드 번호용)
+function makeLabel(text) {
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#444';
+  ctx.font = '600 40px SUIT, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 64, 34);
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = 4;
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+  spr.scale.set(1.2, 0.6, 1);
+  return spr;
+}
+
+function applyDeform(d) {
+  shGroup.children.forEach((obj) => {
+    if (!obj.isMesh) return;
+    const { dirs, absn } = obj.userData;
+    const pos = obj.geometry.attributes.position;
+    const n = pos.count;
+    for (let i = 0; i < n; i++) {
+      const s = R * ((1.0 - d) + d * absn[i]);
+      pos.setXYZ(i, dirs[i * 3] * s, dirs[i * 3 + 1] * s, dirs[i * 3 + 2] * s);
+    }
+    pos.needsUpdate = true;
+    obj.geometry.computeVertexNormals();
+  });
+}
+
+function build(maxBand) {
+  // 기존 자식 정리
+  for (const obj of shGroup.children) {
+    if (obj.isMesh) obj.geometry.dispose();
+    if (obj.isSprite) { obj.material.map.dispose(); obj.material.dispose(); }
+  }
+  shGroup.clear();
+
+  for (let l = 0; l <= maxBand; l++) {
+    const z = (maxBand / 2 - l) * ROW_SPACING;     // 밴드 0 이 맨 위, 전체 세로 중앙 정렬
+    for (let m = -l; m <= l; m++) {
+      const mesh = makeSphere(l, m);
+      mesh.position.set(0, m * COL_SPACING, z);     // 가로 = Y(m), 세로 = Z(밴드)
+      shGroup.add(mesh);
+    }
+    const label = makeLabel('l = ' + l);
+    label.position.set(0, -(maxBand * COL_SPACING) - 1.6, z);
+    shGroup.add(label);
+  }
+
+  applyDeform(parseFloat(defSlider.value));
+
+  applyObjRotation();
+
+  // 콘텐츠 가로 범위(라벨은 왼쪽으로만 튀어나옴 → 비대칭) → 중심을 잡아 target 으로 사용
+  const rightX = maxBand * COL_SPACING + R + 0.6;
+  const leftX = -(maxBand * COL_SPACING) - 2.4;     // 'l = n' 라벨 영역 포함
+  contentCenterY = (leftX + rightX) / 2;
+  halfContentW = (rightX - leftX) / 2;
+  halfContentH = (maxBand / 2) * ROW_SPACING + R + 0.5;
+}
+
+// ---- 카메라: 고정 시점(+X 쪽에서 응시, 살짝 위). 콘텐츠 중심(라벨 포함)을 타깃으로 ----
+const CAM_AZ = 0.0, CAM_EL = 0.16;
+let fitDist = 12;
+function updateCamera() {
+  const dist = fitDist;
+  const ce = Math.cos(CAM_EL), se = Math.sin(CAM_EL);
+  const tx = 0, ty = contentCenterY, tz = 0;   // 콘텐츠 중심
+  camera.position.set(
+    tx + dist * ce * Math.cos(CAM_AZ),
+    ty + dist * ce * Math.sin(CAM_AZ),
+    tz + dist * se
+  );
+  camera.lookAt(tx, ty, tz);
+}
+
+// ---- 구체 회전: yaw(월드 Z) + pitch(월드 Y)만 허용 → roll 없음 ----
+// M = Ry(pitch)·Rz(yaw): 먼저 yaw로 제 축을 돌리고, 화면 가로축(월드 Y)으로 기울임.
+//   'up'이 항상 화면 수직면에 남아 roll이 생기지 않는다(턴테이블 방식).
+//   카메라가 +X 응시 → 가로 드래그 = yaw, 세로 드래그 = pitch.
+const AXIS_Z = new THREE.Vector3(0, 0, 1);
+const AXIS_Y = new THREE.Vector3(0, 1, 0);
+const PITCH_MAX = 1.40;              // ±80° 정도로 제한(뒤집힘 방지)
+const INIT_YAW = 0.5, INIT_PITCH = 0.22;   // 초기 자세(3D 형상이 바로 보이게)
+let yaw = INIT_YAW, pitch = INIT_PITCH;
+const objQuat = new THREE.Quaternion();
+const _qy = new THREE.Quaternion(), _qz = new THREE.Quaternion();
+function applyObjRotation() {
+  _qy.setFromAxisAngle(AXIS_Y, pitch);
+  _qz.setFromAxisAngle(AXIS_Z, yaw);
+  objQuat.copy(_qy).multiply(_qz);     // Ry(pitch)·Rz(yaw)
+  shGroup.children.forEach((obj) => { if (obj.isMesh) obj.quaternion.copy(objQuat); });
+}
+
+let canvasW = 0, canvasH = 0;
+function render() {
+  updateCamera();
+  renderer.render(scene, camera);
+}
+
+// ---- 컨트롤 ----
+defSlider.addEventListener('input', () => {
+  const d = parseFloat(defSlider.value);
+  defVal.textContent = d.toFixed(2);
+  applyDeform(d);
+  render();
+});
+resetBtn.addEventListener('click', () => {
+  vYaw = 0; vPitch = 0;
+  // yaw 목표는 현재 회전수에 가장 가까운 INIT_YAW 등가값(여러 바퀴 풀리지 않게)
+  const targetYaw = INIT_YAW + 2 * PI * Math.round((yaw - INIT_YAW) / (2 * PI));
+  resetAnim = { t: 0, y0: yaw, y1: targetYaw, p0: pitch, p1: INIT_PITCH };
+});
+
+// ---- fit-to-content resize ----
+// 수직 FOV 는 BASE 로 고정. 콘텐츠(반폭 halfContentW · 반높이 halfContentH)가 화면에
+// 들어오도록 카메라 거리를 정한다. 창이 가로로 길면 높이가, 세로로 길면 폭이 제약이 되어
+// 둘 중 더 먼 거리를 채택 → 삼각형 + 라벨이 항상 프레임 안에 꽉 차게 보인다.
+const FIT_MARGIN = 1.04;
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+  canvasW = w; canvasH = h;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(w, h, false);
+  const aspect = w / h;
+  camera.aspect = aspect;
+  camera.fov = BASE_FOV * 180 / PI;     // 수직 FOV 고정
+  camera.updateProjectionMatrix();
+  const tanV = Math.tan(BASE_FOV / 2);
+  const distForH = halfContentH / tanV;            // 높이 맞춤 거리
+  const distForW = halfContentW / (tanV * aspect); // 폭 맞춤 거리
+  fitDist = Math.max(distForH, distForW) * FIT_MARGIN;
+  render();
+}
+
+// ---- 드래그 → 구 회전 / 2축 관성 / 초기화 애니메이션 (카메라는 고정) ----
+const DAMP = 10;
+const VEL_MIN = 0.15;
+const DRAG_K = 0.01;       // 픽셀 → 라디안
+const RESET_DUR = 0.5;     // 초기화 전환 시간(초)
+let dragging = false, prevX = 0, prevY = 0, lastMoveT = 0;
+let vYaw = 0, vPitch = 0;   // 각속도
+let resetAnim = null;       // { t, y0, y1, p0, p1 }
+let prevT = performance.now();
+const clampPitch = (p) => Math.max(-PITCH_MAX, Math.min(PITCH_MAX, p));
+
+function tick(now) {
+  const dt = Math.min((now - prevT) / 1000, 0.1);
+  prevT = now;
+  if (resetAnim) {
+    resetAnim.t = Math.min(resetAnim.t + dt / RESET_DUR, 1);
+    const e = resetAnim.t * resetAnim.t * (3 - 2 * resetAnim.t);   // smoothstep
+    yaw = resetAnim.y0 + (resetAnim.y1 - resetAnim.y0) * e;
+    pitch = resetAnim.p0 + (resetAnim.p1 - resetAnim.p0) * e;
+    applyObjRotation();
+    render();
+    if (resetAnim.t >= 1) resetAnim = null;
+  } else if (!dragging && (Math.abs(vYaw) > VEL_MIN || Math.abs(vPitch) > VEL_MIN)) {
+    yaw += vYaw * dt;
+    const np = clampPitch(pitch + vPitch * dt);
+    if (np === pitch) vPitch = 0; else pitch = np;
+    vYaw *= Math.exp(-dt * DAMP);
+    vPitch *= Math.exp(-dt * DAMP);
+    if (Math.abs(vYaw) <= VEL_MIN) vYaw = 0;
+    if (Math.abs(vPitch) <= VEL_MIN) vPitch = 0;
+    applyObjRotation();
+    render();
+  }
+  requestAnimationFrame(tick);
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  resetAnim = null;        // 드래그 시작 시 초기화 애니메이션 취소
+  vYaw = 0; vPitch = 0;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = performance.now();
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const mt = performance.now();
+  const dtMove = Math.max((mt - lastMoveT) / 1000, 1e-3);
+  const dYaw = (e.clientX - prevX) * DRAG_K;        // 가로 드래그 → yaw
+  const np = clampPitch(pitch + (e.clientY - prevY) * DRAG_K);
+  const dPitch = np - pitch;                        // 세로 드래그 → pitch (클램프 반영)
+  yaw += dYaw;
+  pitch = np;
+  vYaw = dYaw / dtMove;
+  vPitch = dPitch / dtMove;
+  applyObjRotation();
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = mt;
+  render();
+});
+const endDrag = () => {
+  if (!dragging) return;
+  dragging = false;
+  if (performance.now() - lastMoveT > 100) { vYaw = 0; vPitch = 0; }
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointerleave', endDrag);
+
+window.addEventListener('resize', resize);
+if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
+
+// ---- init ----
+build(MAX_BAND);
+resize();
+requestAnimationFrame(tick);
+</script>
+
+</body>
+</html>
