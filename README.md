@@ -29,6 +29,7 @@
 - [BRDF Lobe](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/BRDF_Lobe_Visualizer.html)
 - [Specular IBL](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Specular_IBL_Visualizer.html)
 - [Full IBL (Diffuse + Specular)](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Full_IBL_Visualizer.html)
+- [Helmet IBL (FBX 모델)](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Helmet_IBL_Visualizer.html)
 
 ## 사용 방법
  

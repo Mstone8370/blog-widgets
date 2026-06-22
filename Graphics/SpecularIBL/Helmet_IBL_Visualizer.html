@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .helmet-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .helmet-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .helmet-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    background: #404040;
+    touch-action: none;
+  }
+  .helmet-vis canvas:active { cursor: grabbing; }
+  .helmet-vis .controls {
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 56px 1fr 56px;
+    align-items: center;
+    gap: 12px 12px;
+    flex-shrink: 0;
+  }
+  .helmet-vis .label { font-size: 15px; color: #444; }
+  .helmet-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .helmet-vis input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 3px;
+    background: #d4d4d8;
+    border-radius: 2px;
+    outline: none;
+    margin: 0;
+    touch-action: pan-y;
+  }
+  .helmet-vis input[type=range]::-webkit-slider-thumb,
+  .helmet-vis input[type=range]::-moz-range-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #2052BB;
+    cursor: pointer;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="helmet-vis">
+  <div class="canvas-wrap">
+    <canvas id="helmetCanvas"></canvas>
+  </div>
+  <div class="controls">
+    <div class="label">Pitch</div>
+    <input type="range" id="pitchSlider" min="-90" max="90" value="0">
+    <div class="value" id="pitchVal">0°</div>
+
+    <div class="label">Yaw</div>
+    <input type="range" id="yawSlider" min="-180" max="180" value="0">
+    <div class="value" id="yawVal">0°</div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+/*
+ * Diffuse IBL + Specular IBL 합산을 구체 대신 Helmet(FBX) 모델에 적용한 시각화.
+ * BaseColor/Metallic/Roughness/Emissive/Normal 은 슬라이더가 아니라 텍스처에서 읽는다.
+ *
+ *   diffuseColor = baseColor * (1 - metallic)
+ *   F0           = mix(0.04, baseColor, metallic)
+ *   diffuse      = diffuseColor * evalSH(N)              // 디퓨즈는 SH(9계수) 복원
+ *   spec         = prefiltered(R, roughness) * (F0*EnvBRDF.x + EnvBRDF.y)
+ *   결과         = gammaEnc(diffuse + spec + emissive)
+ *
+ * 텍스처 샘플러 한도(MAX_TEXTURE_IMAGE_UNITS=16) 때문에:
+ *   - prefiltered 10밉을 '밉맵 1개 큐브'로 합쳐 textureCubeLodEXT 로 LOD 샘플 (샘플러 10→1).
+ *     기존 .hdr 60장(6면×10레벨)을 그대로 런타임에 밉 체인으로 조립 → 새 파일/추가 로딩 없음.
+ *   - 디퓨즈는 irradiance 큐브 대신 SH 계수(sh_coeffs.js 공유)로 복원 → 샘플러 1개 추가 절약.
+ *   최종 샘플러 = prefiltered 1 + LUT 1 + 머티리얼 5 = 7.
+ *
+ * 좌표계: 씬은 Unreal(X앞,Y오른,Z위). IBL 큐브맵은 cubeDir(v)=(v.x,-v.y,v.z).
+ *   FBX 축 메타데이터가 Y-up(UpAxis=1) 이라 모델을 X축 +90° 회전해 Z-up 씬에 맞춘다.
+ * 노멀맵: DirectX 기준 → 탄젠트공간 노멀의 G(.y) 부호 반전. TBN 은 화면 미분으로 구성.
+ * BaseColor/Emissive 는 sRGB→선형, Metallic/Roughness/Normal 은 선형 데이터. Three.js(0.160).
+ */
+import * as THREE from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+import { SH_DIFFUSE_COEFFS } from '../DiffuseIBL/sh_coeffs.js';
+
+const PI = Math.PI;
+const GAMMA = 2.2;
+const MAX_LOD = 9.0;          // prefiltered 밉 레벨 9 (= roughness 1.0)
+const BASE_FOV = 40 * PI / 180;
+const CAM_DIST = 4.2;
+const TARGET_R = 1.15;        // 모델 fit 반지름
+const MODEL_UP_FIX = PI / 2;  // FBX Y-up → 씬 Z-up (X축 +90°)
+const GRID_C   = 0xe3e3e6;
+const GRID_MID = 0xd0d0d4;
+const AXIS_C   = 0x8a93a6;
+
+const canvas = document.getElementById('helmetCanvas');
+const pitchSlider = document.getElementById('pitchSlider');
+const yawSlider = document.getElementById('yawSlider');
+const pitchVal = document.getElementById('pitchVal');
+const yawVal = document.getElementById('yawVal');
+
+// ---- renderer / scene / camera ----
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setClearColor(0x404040, 1);
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+const maxAniso = renderer.capabilities.getMaxAnisotropy();
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
+camera.up.set(0, 0, 1);   // Z-up (Unreal)
+
+const rgbeLoader = new RGBELoader().setDataType(THREE.HalfFloatType);
+const FACE_NAMES = ['Xp', 'Xm', 'Yp', 'Ym', 'Zp', 'Zm'];
+
+// ---- 스페큘러: prefiltered 10밉 → '밉맵 1개 큐브'로 조립 ----
+// 6면 × 10레벨(512²→1²)을 읽어 level0=image, level1..9=mipmaps 로 묶는다.
+// three 의 DataTexture 큐브 업로드가 texture.mipmaps[j].image[i] 를 레벨 j+1 로 올린다.
+Promise.all(
+  Array.from({ length: 10 }, (_, m) =>
+    Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync(`./Prefiltered/${f}_${m}.hdr`)))
+  )
+).then((levels) => {
+  const cube = new THREE.CubeTexture(levels[0]);                 // level 0 (512²)
+  cube.mipmaps = levels.slice(1).map(faces => ({ image: faces })); // level 1..9
+  cube.type = THREE.HalfFloatType;
+  cube.format = THREE.RGBAFormat;
+  cube.colorSpace = THREE.LinearSRGBColorSpace;
+  cube.minFilter = THREE.LinearMipmapLinearFilter;              // 밉 간 트라이리니어
+  cube.magFilter = THREE.LinearFilter;
+  cube.generateMipmaps = false;
+  cube.needsUpdate = true;
+  helmetUniforms.uPrefiltered.value = cube;
+  render();
+}).catch((err) => console.error('prefiltered load failed:', err));
+
+// ---- environment BRDF LUT (R=scale, G=bias, 선형 데이터) ----
+const lutTex = new EXRLoader().setDataType(THREE.HalfFloatType)
+  .load('./EnvironmentBRDF.exr', () => render());
+lutTex.colorSpace = THREE.LinearSRGBColorSpace;
+lutTex.minFilter = THREE.LinearFilter;
+lutTex.magFilter = THREE.LinearFilter;
+lutTex.wrapS = THREE.ClampToEdgeWrapping;
+lutTex.wrapT = THREE.ClampToEdgeWrapping;
+lutTex.generateMipmaps = false;
+
+// ---- helmet 텍스처 (./Helmet/Helmet.fbm) ----
+const texLoader = new THREE.TextureLoader().setPath('./Helmet/Helmet.fbm/');
+function loadTex(name) {
+  const t = texLoader.load(name, () => render());
+  t.anisotropy = maxAniso;
+  t.colorSpace = THREE.LinearSRGBColorSpace;   // ShaderMaterial → 셰이더에서 직접 디코딩
+  t.flipY = true;   // 이 모델 UV 기준엔 flipY=true(기본값) 가 맞음
+  t.wrapS = THREE.RepeatWrapping;   // UV 가 0~1 을 벗어남 → clamp(가장자리 늘어남) 대신 타일링
+  t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+const baseTex = loadTex('BaseColor.png');
+const metalTex = loadTex('Metallic.png');
+const roughTex = loadTex('Roughness.png');
+const normTex = loadTex('NormalMap.png');
+const emisTex = loadTex('Emissive.png');
+
+// 공용 GLSL
+const CUBE_GLSL = `
+  vec3 cubeDir(vec3 v) { return vec3(v.x, -v.y, v.z); }
+  vec3 gammaEnc(vec3 c) { return pow(max(c, 0.0), vec3(1.0 / ${GAMMA.toFixed(4)})); }
+`;
+
+// ---- 배경 스카이박스 (원본 환경맵, gamma PNG) ----
+const envTex = new THREE.CubeTextureLoader()
+  .setPath('../DiffuseIBL/Cubemap/')
+  .load(['Xp.png', 'Xm.png', 'Yp.png', 'Ym.png', 'Zp.png', 'Zm.png'], () => render());
+envTex.colorSpace = THREE.LinearSRGBColorSpace;
+envTex.flipY = false;
+
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: { uEnv: { value: envTex } },
+  side: THREE.BackSide,
+  depthWrite: false,
+  vertexShader: `
+    varying vec3 vWorldPos;
+    void main() {
+      vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+    uniform samplerCube uEnv;
+    varying vec3 vWorldPos;
+    ${CUBE_GLSL}
+    void main() {
+      vec3 d = normalize(vWorldPos - cameraPosition);
+      gl_FragColor = vec4(textureCube(uEnv, cubeDir(d)).rgb, 1.0);
+    }
+  `,
+});
+const sky = new THREE.Mesh(new THREE.BoxGeometry(200, 200, 200), skyMat);
+sky.frustumCulled = false;
+sky.renderOrder = -1;
+scene.add(sky);
+
+// ---- helmet 머티리얼 (Diffuse(SH) + Specular(밉 큐브) IBL, 텍스처 기반) ----
+const helmetUniforms = {
+  uPrefiltered: { value: null },
+  uLUT: { value: lutTex },
+  uSH: { value: SH_DIFFUSE_COEFFS.map(c => new THREE.Vector3(c[0], c[1], c[2])) },
+  uBaseColor: { value: baseTex },
+  uMetallic: { value: metalTex },
+  uRoughness: { value: roughTex },
+  uNormalMap: { value: normTex },
+  uEmissive: { value: emisTex },
+};
+
+const helmetMat = new THREE.ShaderMaterial({
+  uniforms: helmetUniforms,
+  extensions: { derivatives: true, shaderTextureLOD: true },
+  vertexShader: `
+    varying vec3 vWorldPos;
+    varying vec3 vWorldNormal;
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+      vWorldNormal = mat3(modelMatrix) * normal;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+    uniform samplerCube uPrefiltered;
+    uniform sampler2D uLUT;
+    uniform vec3 uSH[9];
+    uniform sampler2D uBaseColor, uMetallic, uRoughness, uNormalMap, uEmissive;
+    varying vec3 vWorldPos;
+    varying vec3 vWorldNormal;
+    varying vec2 vUv;
+    ${CUBE_GLSL}
+
+    // 3밴드 SH 로 diffuse irradiance(E/π) 복원
+    vec3 evalSH(vec3 n) {
+      float X = n.x, Y = n.y, Z = n.z;
+      return uSH[0] * 0.282095
+           + uSH[1] * (0.488603 * Y) + uSH[2] * (0.488603 * Z) + uSH[3] * (0.488603 * X)
+           + uSH[4] * (1.092548 * X * Y) + uSH[5] * (1.092548 * Y * Z)
+           + uSH[6] * (0.315392 * (3.0 * Z * Z - 1.0)) + uSH[7] * (1.092548 * X * Z)
+           + uSH[8] * (0.546274 * (X * X - Y * Y));
+    }
+
+    // 화면 미분으로 TBN 구성 (탄젠트 속성 불필요) - Schüler 코탄젠트 프레임
+    mat3 cotangentFrame(vec3 N, vec3 p, vec2 uv) {
+      vec3 dp1 = dFdx(p);
+      vec3 dp2 = dFdy(p);
+      vec2 duv1 = dFdx(uv);
+      vec2 duv2 = dFdy(uv);
+      vec3 dp2perp = cross(dp2, N);
+      vec3 dp1perp = cross(N, dp1);
+      vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+      vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+      float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+      return mat3(T * invmax, B * invmax, N);
+    }
+
+    void main() {
+      vec3 baseColor = pow(texture2D(uBaseColor, vUv).rgb, vec3(${GAMMA.toFixed(1)}));  // sRGB→선형
+      float metallic = texture2D(uMetallic, vUv).r;
+      float rough = texture2D(uRoughness, vUv).r;
+      vec3 emissive = pow(texture2D(uEmissive, vUv).rgb, vec3(${GAMMA.toFixed(1)}));
+
+      // 노멀맵 (DirectX → OpenGL: G 반전)
+      vec3 mapN = texture2D(uNormalMap, vUv).xyz * 2.0 - 1.0;
+      mapN.y = -mapN.y;
+      vec3 Ng = normalize(vWorldNormal);
+      mat3 TBN = cotangentFrame(Ng, vWorldPos, vUv);
+      vec3 N = normalize(TBN * mapN);
+
+      vec3 V = normalize(cameraPosition - vWorldPos);
+      vec3 R = reflect(-V, N);
+      float NoV = max(dot(N, V), 0.0);
+
+      vec3 diffuseColor = baseColor * (1.0 - metallic);
+      vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+
+      // Diffuse IBL (SH)
+      vec3 diffuse = diffuseColor * max(evalSH(cubeDir(N)), vec3(0.0));
+
+      // Specular IBL: prefiltered 밉 큐브 LOD 샘플 + LUT
+      float lod = clamp(rough, 0.0, 1.0) * ${MAX_LOD.toFixed(1)};
+      vec3 prefilteredColor = textureCubeLodEXT(uPrefiltered, cubeDir(R), lod).rgb;
+      vec2 envBRDF = texture2D(uLUT, vec2(NoV, rough)).rg;
+      vec3 spec = prefilteredColor * (F0 * envBRDF.x + envBRDF.y);
+
+      gl_FragColor = vec4(gammaEnc(diffuse + spec + emissive), 1.0);
+    }
+  `,
+});
+
+// ---- 모델 회전 그룹: yawGroup(월드 Z) ⊃ pitchGroup(로컬 X) ⊃ 모델 ----
+//   슬라이더로 모델을 제자리에서 yaw/pitch. (카메라 오빗과 독립)
+const yawGroup = new THREE.Group();
+const pitchGroup = new THREE.Group();
+yawGroup.add(pitchGroup);
+scene.add(yawGroup);
+
+// ---- 모델 로드 (FBX) ----
+new FBXLoader().load('./Helmet/Helmet.fbx', (obj) => {
+  obj.traverse((c) => { if (c.isMesh) { c.material = helmetMat; c.frustumCulled = false; } });
+  obj.rotation.x = MODEL_UP_FIX;                 // Y-up → Z-up
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = 0.5 * Math.max(size.x, size.y, size.z) || 1.0;
+  const s = TARGET_R / radius;
+  obj.scale.setScalar(s);
+  obj.position.set(-center.x * s, -center.y * s, -center.z * s);   // 원점 중심
+  pitchGroup.add(obj);
+  render();
+}, undefined, (err) => console.error('FBX load failed:', err));
+
+// ---- Pitch / Yaw 슬라이더 (모델 회전) ----
+function applyPitch() {
+  const deg = +pitchSlider.value;
+  pitchGroup.rotation.x = deg * PI / 180;   // 앞뒤 끄덕임(모델이 -Y 를 향함 → 회전축은 X)
+  pitchVal.textContent = deg + '°';
+}
+function applyYaw() {
+  const deg = +yawSlider.value;
+  yawGroup.rotation.z = deg * PI / 180;
+  yawVal.textContent = deg + '°';
+}
+pitchSlider.addEventListener('input', () => { applyPitch(); render(); });
+yawSlider.addEventListener('input', () => { applyYaw(); render(); });
+applyPitch();
+applyYaw();   // 슬라이더 초기값 적용 (기본 Pitch/Yaw = 0)
+
+// ---- 바닥 격자 (x-y 평면) + z축 선 ----
+const grid = new THREE.GridHelper(4, 8, GRID_MID, GRID_C);
+grid.rotation.x = PI / 2;
+scene.add(grid);
+scene.add(new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1.5),
+  ]),
+  new THREE.LineBasicMaterial({ color: AXIS_C })
+));
+
+// ---- 카메라 (구면 좌표) ----
+let orbitAz = 0.6;
+let orbitEl = 0.35;
+const EL_MAX = 1.45, EL_MIN = -1.45;
+function updateCamera() {
+  const ce = Math.cos(orbitEl), se = Math.sin(orbitEl);
+  camera.position.set(
+    CAM_DIST * ce * Math.cos(orbitAz),
+    CAM_DIST * ce * Math.sin(orbitAz),
+    CAM_DIST * se
+  );
+  camera.lookAt(0, 0, 0);
+}
+
+function render() {
+  updateCamera();
+  renderer.render(scene, camera);
+}
+
+// ---- 적응형 FOV resize ----
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(w, h, false);
+  const aspect = w / h;
+  camera.aspect = aspect;
+  const vfov = aspect >= 1 ? BASE_FOV : 2 * Math.atan(Math.tan(BASE_FOV / 2) / aspect);
+  camera.fov = vfov * 180 / PI;
+  camera.updateProjectionMatrix();
+  render();
+}
+
+// ---- 상시 rAF 루프: 드래그 / 2축 관성 / 유휴 시 azimuth 자동회전 ----
+const DAMP      = 10;
+const VEL_MIN   = 0.15;
+const idleDelay = 3.0;
+const rotSpeed  = 0.25;
+const RAMP_TIME = 1.5;
+
+let dragging = false, prevX = 0, prevY = 0, lastMoveT = 0;
+let vAz = 0, vEl = 0;
+let lastInput = -Infinity;
+let ramp = 0;
+let prevT = performance.now();
+
+function tick(now) {
+  const dt = Math.min((now - prevT) / 1000, 0.1);
+  prevT = now;
+  if (dragging) {
+    lastInput = now;
+    ramp = 0;
+  } else if (Math.abs(vAz) > VEL_MIN || Math.abs(vEl) > VEL_MIN) {
+    orbitAz += vAz * dt;
+    const newEl = orbitEl + vEl * dt;
+    if (newEl <= EL_MIN)      { orbitEl = EL_MIN; vEl = 0; }
+    else if (newEl >= EL_MAX) { orbitEl = EL_MAX; vEl = 0; }
+    else                      { orbitEl = newEl; }
+    vAz *= Math.exp(-dt * DAMP);
+    vEl *= Math.exp(-dt * DAMP);
+    if (Math.abs(vAz) <= VEL_MIN) vAz = 0;
+    if (Math.abs(vEl) <= VEL_MIN) vEl = 0;
+    ramp = 0;
+    lastInput = now;
+    render();
+  } else if ((now - lastInput) / 1000 >= idleDelay) {
+    ramp = Math.min(ramp + dt / RAMP_TIME, 1);
+    const eased = ramp * ramp * (3 - 2 * ramp);
+    orbitAz -= rotSpeed * eased * dt;
+    render();
+  } else {
+    ramp = 0;
+  }
+  requestAnimationFrame(tick);
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  vAz = 0; vEl = 0;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = performance.now();
+  lastInput = lastMoveT;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const mt = performance.now();
+  const dtMove = Math.max((mt - lastMoveT) / 1000, 1e-3);
+  const dAz = -(e.clientX - prevX) * 0.008;
+  const newEl = orbitEl + (e.clientY - prevY) * 0.008;
+  const clampedEl = Math.max(EL_MIN, Math.min(EL_MAX, newEl));
+  const dEl = clampedEl - orbitEl;
+  orbitAz += dAz;
+  orbitEl = clampedEl;
+  vAz = dAz / dtMove;
+  vEl = dEl / dtMove;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = mt;
+  lastInput = mt;
+  render();
+});
+const endDrag = () => {
+  if (!dragging) return;
+  dragging = false;
+  if (performance.now() - lastMoveT > 100) { vAz = 0; vEl = 0; }
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointerleave', endDrag);
+
+window.addEventListener('resize', resize);
+if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
+
+// ---- init ----
+resize();
+requestAnimationFrame(tick);
+</script>
+
+</body>
+</html>
