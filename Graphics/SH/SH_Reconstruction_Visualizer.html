@@ -159,7 +159,7 @@ const PI = Math.PI;
 const BASE_FOV = 40 * PI / 180;
 const CAM_DIST = 4.2;
 const R = 1.0;              // 구 반지름 (diffuse IBL 위젯과 동일)
-const DETAIL = 6;          // IcosahedronGeometry 세분
+const DETAIL = 12;          // IcosahedronGeometry 세분
 const MAX_BAND = 2;        // 밴드 0..2 (계수 9개)
 const GRID_C   = 0xe3e3e6;
 const GRID_MID = 0xd0d0d4;
@@ -232,10 +232,7 @@ const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
 camera.up.set(0, 0, 1);   // Z-up (Unreal)
 
 // ---- 조명 (입체감은 살리되 채도를 잃지 않도록 ambient 강하게) ----
-scene.add(new THREE.AmbientLight(0xffffff, 0.92));
-const dir = new THREE.DirectionalLight(0xffffff, 0.32);
-dir.position.set(3, -2, 4);
-scene.add(dir);
+scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
 // ---- 색 매핑: 0 부근 중립 → 양수 빨강 / 음수 파랑 ----
 const NEUTRAL = new THREE.Color(0.97, 0.97, 0.97);
