@@ -192,13 +192,25 @@ Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync('../DiffuseIBL/Irradiance/'
   .then((texs) => { sphereMat.uniforms.uIrradiance.value = makeCube(texs); render(); })
   .catch((err) => console.error('irradiance load failed:', err));
 
-// ---- 스페큘러: prefiltered 큐브맵 10개 밉 레벨 ----
-function loadHDRLevel(level, onReady) {
-  const files = FACE_NAMES.map(f => `${f}_${level}.hdr`);
-  Promise.all(files.map(f => rgbeLoader.loadAsync('./Prefiltered/' + f)))
-    .then((texs) => { onReady(makeCube(texs)); render(); })
-    .catch((err) => console.error('HDR level load failed:', level, err));
-}
+// ---- 스페큘러: prefiltered 10밉 → '밉맵 1개 큐브'로 조립 (샘플러 10→1) ----
+// 6면 × 10레벨(512²→1²) → level0=image, level1..9=mipmaps. textureCubeLodEXT 로 LOD 샘플.
+Promise.all(
+  Array.from({ length: 10 }, (_, m) =>
+    Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync(`./Prefiltered/${f}_${m}.hdr`)))
+  )
+).then((levels) => {
+  const cube = new THREE.CubeTexture(levels[0]);
+  cube.mipmaps = levels.slice(1).map(faces => ({ image: faces }));
+  cube.type = THREE.HalfFloatType;
+  cube.format = THREE.RGBAFormat;
+  cube.colorSpace = THREE.LinearSRGBColorSpace;
+  cube.minFilter = THREE.LinearMipmapLinearFilter;
+  cube.magFilter = THREE.LinearFilter;
+  cube.generateMipmaps = false;
+  cube.needsUpdate = true;
+  sphereMat.uniforms.uPrefiltered.value = cube;
+  render();
+}).catch((err) => console.error('prefiltered load failed:', err));
 
 // ---- environment BRDF LUT (2D, R=scale G=bias, 선형 데이터) ----
 const lutTex = new EXRLoader().setDataType(THREE.HalfFloatType)
@@ -257,11 +269,12 @@ const sphereUniforms = {
   uBaseColor: { value: new THREE.Color(0.8, 0.8, 0.8) },
   uMetallic: { value: 0.0 },
   uRough: { value: 0.25 },
+  uPrefiltered: { value: null },   // 밉맵 큐브 (로드 완료 시 주입)
 };
-for (let m = 0; m < 10; m++) sphereUniforms['uEnv' + m] = { value: null };
 
 const sphereMat = new THREE.ShaderMaterial({
   uniforms: sphereUniforms,
+  extensions: { shaderTextureLOD: true },
   vertexShader: `
     varying vec3 vN;
     varying vec3 vWorldPos;
@@ -273,10 +286,7 @@ const sphereMat = new THREE.ShaderMaterial({
   `,
   fragmentShader: `
     precision highp float;
-    uniform samplerCube uEnv0; uniform samplerCube uEnv1; uniform samplerCube uEnv2;
-    uniform samplerCube uEnv3; uniform samplerCube uEnv4; uniform samplerCube uEnv5;
-    uniform samplerCube uEnv6; uniform samplerCube uEnv7; uniform samplerCube uEnv8;
-    uniform samplerCube uEnv9;
+    uniform samplerCube uPrefiltered;
     uniform samplerCube uIrradiance;
     uniform sampler2D uLUT;
     uniform vec3 uBaseColor;
@@ -285,27 +295,6 @@ const sphereMat = new THREE.ShaderMaterial({
     varying vec3 vN;
     varying vec3 vWorldPos;
     ${CUBE_GLSL}
-
-    // 정수 인덱스 대신 float 임계값으로 레벨 선택 (GLSL ES 1.0 호환)
-    vec3 sampleLevel(float i, vec3 d) {
-      if (i < 0.5) return textureCube(uEnv0, d).rgb;
-      else if (i < 1.5) return textureCube(uEnv1, d).rgb;
-      else if (i < 2.5) return textureCube(uEnv2, d).rgb;
-      else if (i < 3.5) return textureCube(uEnv3, d).rgb;
-      else if (i < 4.5) return textureCube(uEnv4, d).rgb;
-      else if (i < 5.5) return textureCube(uEnv5, d).rgb;
-      else if (i < 6.5) return textureCube(uEnv6, d).rgb;
-      else if (i < 7.5) return textureCube(uEnv7, d).rgb;
-      else if (i < 8.5) return textureCube(uEnv8, d).rgb;
-      else return textureCube(uEnv9, d).rgb;
-    }
-    // prefiltered 샘플 (인접 두 레벨 트라이리니어 보간)
-    vec3 prefiltered(vec3 d, float rough) {
-      float lod = clamp(rough, 0.0, 1.0) * ${MAX_LOD.toFixed(1)};
-      float l0 = floor(lod);
-      float f = lod - l0;
-      return mix(sampleLevel(l0, d), sampleLevel(min(l0 + 1.0, ${MAX_LOD.toFixed(1)}), d), f);
-    }
 
     void main() {
       vec3 N = normalize(vN);
@@ -319,8 +308,9 @@ const sphereMat = new THREE.ShaderMaterial({
       // Diffuse IBL: irradiance(=E/π) * 디퓨즈 알베도
       vec3 diffuse = diffuseColor * textureCube(uIrradiance, cubeDir(N)).rgb;
 
-      // Specular IBL: split-sum
-      vec3 prefilteredColor = prefiltered(cubeDir(R), uRough);
+      // Specular IBL: split-sum (prefiltered 밉 큐브 LOD 샘플)
+      float lod = clamp(uRough, 0.0, 1.0) * ${MAX_LOD.toFixed(1)};
+      vec3 prefilteredColor = textureCubeLodEXT(uPrefiltered, cubeDir(R), lod).rgb;
       vec2 envBRDF = texture2D(uLUT, vec2(NoV, uRough)).rg;   // scale, bias
       vec3 spec = prefilteredColor * (F0 * envBRDF.x + envBRDF.y);
 
@@ -329,11 +319,6 @@ const sphereMat = new THREE.ShaderMaterial({
   `,
 });
 scene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), sphereMat));
-
-// prefiltered 10개 밉 레벨 비동기 로드 → 스피어 유니폼에 주입
-for (let m = 0; m < 10; m++) {
-  loadHDRLevel(m, (cube) => { sphereMat.uniforms['uEnv' + m].value = cube; });
-}
 
 // ---- 바닥 격자 (x-y 평면, z=0) + z축 선: UE 좌표 기준 방향 표시 ----
 const grid = new THREE.GridHelper(4, 8, GRID_MID, GRID_C);
