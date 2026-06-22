@@ -139,7 +139,8 @@ const PI = Math.PI;
 const GAMMA = 2.2;
 const MAX_LOD = 9.0;          // prefiltered 밉 레벨 9 (= roughness 1.0)
 const BASE_FOV = 40 * PI / 180;
-const CAM_DIST = 4.2;
+const CAM_DIST = 4.2;          // 기본 카메라 거리
+const CAM_DIST_MIN = 3.0, CAM_DIST_MAX = 6.0;   // 휠/핀치 줌 범위(작게)
 const TARGET_R = 1.15;        // 모델 fit 반지름
 const MODEL_UP_FIX = PI / 2;  // FBX Y-up → 씬 Z-up (X축 +90°)
 const GRID_C   = 0xe3e3e6;
@@ -399,16 +400,17 @@ scene.add(new THREE.Line(
   new THREE.LineBasicMaterial({ color: AXIS_C })
 ));
 
-// ---- 카메라 (구면 좌표) ----
+// ---- 카메라 (구면 좌표 + 줌) ----
 let orbitAz = 0.6;
 let orbitEl = 0.35;
+let camDist = CAM_DIST;
 const EL_MAX = 1.45, EL_MIN = -1.45;
 function updateCamera() {
   const ce = Math.cos(orbitEl), se = Math.sin(orbitEl);
   camera.position.set(
-    CAM_DIST * ce * Math.cos(orbitAz),
-    CAM_DIST * ce * Math.sin(orbitAz),
-    CAM_DIST * se
+    camDist * ce * Math.cos(orbitAz),
+    camDist * ce * Math.sin(orbitAz),
+    camDist * se
   );
   camera.lookAt(0, 0, 0);
 }
@@ -475,16 +477,47 @@ function tick(now) {
   requestAnimationFrame(tick);
 }
 
+// ---- 입력: 1손가락 드래그(오빗) + 2손가락 핀치 줌 + 휠 줌 ----
+const clampDist = (d) => Math.max(CAM_DIST_MIN, Math.min(CAM_DIST_MAX, d));
+const pointers = new Map();
+let pinchPrevDist = 0;
+function pointerDist() {
+  const it = pointers.values();
+  const a = it.next().value, b = it.next().value;
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
 canvas.addEventListener('pointerdown', (e) => {
-  dragging = true;
-  vAz = 0; vEl = 0;
-  prevX = e.clientX; prevY = e.clientY;
-  lastMoveT = performance.now();
-  lastInput = lastMoveT;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   canvas.setPointerCapture(e.pointerId);
+  if (pointers.size === 1) {
+    dragging = true;
+    vAz = 0; vEl = 0;
+    prevX = e.clientX; prevY = e.clientY;
+    lastMoveT = performance.now();
+    lastInput = lastMoveT;
+  } else if (pointers.size === 2) {
+    dragging = false;              // 핀치 중엔 오빗 중지
+    pinchPrevDist = pointerDist();
+  }
 });
 canvas.addEventListener('pointermove', (e) => {
-  if (!dragging) return;
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  p.x = e.clientX; p.y = e.clientY;
+
+  if (pointers.size >= 2) {        // 핀치 줌: 벌리면 가까이, 모으면 멀리
+    const d = pointerDist();
+    if (pinchPrevDist > 0 && d > 0) {
+      camDist = clampDist(camDist * (pinchPrevDist / d));
+      lastInput = performance.now();
+      render();
+    }
+    pinchPrevDist = d;
+    return;
+  }
+
+  if (!dragging) return;           // 1손가락 드래그(오빗)
   const mt = performance.now();
   const dtMove = Math.max((mt - lastMoveT) / 1000, 1e-3);
   const dAz = -(e.clientX - prevX) * 0.008;
@@ -500,13 +533,33 @@ canvas.addEventListener('pointermove', (e) => {
   lastInput = mt;
   render();
 });
-const endDrag = () => {
-  if (!dragging) return;
-  dragging = false;
-  if (performance.now() - lastMoveT > 100) { vAz = 0; vEl = 0; }
-};
-canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointerleave', endDrag);
+function removePointer(e) {
+  if (!pointers.delete(e.pointerId)) return;
+  if (pointers.size < 2) pinchPrevDist = 0;
+  if (pointers.size === 0) {
+    if (dragging) {
+      dragging = false;
+      if (performance.now() - lastMoveT > 100) { vAz = 0; vEl = 0; }
+    }
+  } else if (pointers.size === 1) {
+    // 핀치 후 한 손가락 남음 → 그 손가락으로 드래그 재개(점프 방지)
+    const q = pointers.values().next().value;
+    dragging = true;
+    vAz = 0; vEl = 0;
+    prevX = q.x; prevY = q.y;
+    lastMoveT = performance.now();
+    lastInput = lastMoveT;
+  }
+}
+canvas.addEventListener('pointerup', removePointer);
+canvas.addEventListener('pointercancel', removePointer);
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  camDist = clampDist(camDist * Math.exp(e.deltaY * 0.0015));   // 아래로 굴리면 멀어짐
+  lastInput = performance.now();
+  render();
+}, { passive: false });
 
 window.addEventListener('resize', resize);
 if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
