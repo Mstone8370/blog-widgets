@@ -33,14 +33,20 @@
     position: relative;
   }
   .brdf-vis canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
     display: block;
     width: 100%;
     height: 100%;
+  }
+  .brdf-vis #brdfCanvas {
     cursor: grab;
     background: #fdfdfd;
     touch-action: none;
   }
-  .brdf-vis canvas:active { cursor: grabbing; }
+  .brdf-vis #brdfCanvas:active { cursor: grabbing; }
+  .brdf-vis #brdfLabels { pointer-events: none; }
   .brdf-vis .controls {
     padding: 4px;
     display: grid;
@@ -87,6 +93,7 @@
 <div class="brdf-vis">
   <div class="canvas-wrap">
     <canvas id="brdfCanvas"></canvas>
+    <canvas id="brdfLabels"></canvas>
   </div>
   <div class="controls">
     <div class="label">Roughness</div>
@@ -105,427 +112,363 @@
   </div>
 </div>
 
-<script>
-(function() {
-  const ACCENT_N = '#2052BB';
-  const ACCENT_V = '#22a';
-  const PLANE = '#e8e8e8';
-  const PI = Math.PI;
-  const PI2 = PI * 2;
-  const THETA_STEPS = 28;
-  const PHI_STEPS = 56;
-  const TS1 = THETA_STEPS + 1;
-  const PS1 = PHI_STEPS + 1;
-  const VERT_COUNT = TS1 * PS1;
-  const QUAD_COUNT = THETA_STEPS * PHI_STEPS;
-  const LOOK_AT_Y = 0.4;
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+/*
+ * 스페큘러 BRDF 로브(반사 분포) 시각화 — Three.js 판(고해상 메시 + 실제 깊이버퍼 + 법선 음영).
+ * 방향 L=(θ,φ) 에서의 BRDF 값을 반지름으로 둔 파라메트릭 표면. 손수 짠 2D 캔버스 투영(painter's
+ * algorithm) 대신 Three 로 렌더 → self-occlusion 정렬 아티팩트 없음, 매끈한 실루엣.
+ *
+ * intensity = D(GGX) · V(Smith height-correlated) · NoL  (기존 위젯과 동일 수식, 셰이딩만 개선)
+ *   a = roughness²,  H = normalize(L+V)
+ *   D   = a²/π / ( NoH²(a²-1)+1 )²
+ *   Vis = 0.5 / ( NoL·√(NoV(NoV−NoV·a²)+a²) + NoV·√(NoL(NoL−NoL·a²)+a²) )
+ *   val = D · Vis · NoL,   반지름 r = val · scale
+ * 색: 강도 t(0..1) → 깊은 빨강 그라데이션. 정규화 체크 시 r = 0.9/max.
+ *
+ * 좌표계: Unreal Z-up. 법선 n = +Z(위), 바닥 = xy 평면, 뷰벡터 v 는 x-z 평면에서 n 으로부터 θ.
+ *   L = (sinθcosφ, sinθsinφ, cosθ). 화살표는 D_GGX 등과 동일한 커스텀(원기둥+원뿔) 형태.
+ *   라벨 n·v 는 별도 2D 캔버스 오버레이에 그려 고해상 텍스트 유지(스프라이트 텍스처 X).
+ */
+import * as THREE from 'three';
 
-  const sinTheta = new Float32Array(TS1);
-  const cosTheta = new Float32Array(TS1);
-  const sinPhi = new Float32Array(PS1);
-  const cosPhi = new Float32Array(PS1);
+const PI = Math.PI;
+const PI2 = PI * 2;
+const BASE_FOV = 28 * PI / 180;   // 낮은 FOV → 원근 왜곡 감소
+const CAM_DIST = 4.7;             // FOV 낮춘 만큼 거리 보정(프레이밍 유지)
+const TARGET_Z = 0.42;
+const THETA_STEPS = 128;          // 메시 해상도 (기존 28 → 128)
+const PHI_STEPS = 256;            //              (기존 56 → 256)
+const TS1 = THETA_STEPS + 1;
+const PS1 = PHI_STEPS + 1;
+const VERT_COUNT = TS1 * PS1;
+const ACCENT_N = '#2052bb';      // n: 표준 액센트 블루
+const ACCENT_V = '#e0821e';      // v: 대비되는 따뜻한 주황 계열
+const ACCENT_N_HEX = 0x2052bb;
+const ACCENT_V_HEX = 0xe0821e;
+
+// 방향 그리드 sin/cos 사전계산
+const sinT = new Float32Array(TS1), cosT = new Float32Array(TS1);
+const sinP = new Float32Array(PS1), cosP = new Float32Array(PS1);
+for (let i = 0; i < TS1; i++) { const t = (i / THETA_STEPS) * (PI / 2); sinT[i] = Math.sin(t); cosT[i] = Math.cos(t); }
+for (let j = 0; j < PS1; j++) { const p = (j / PHI_STEPS) * PI2; sinP[j] = Math.sin(p); cosP[j] = Math.cos(p); }
+
+const canvas = document.getElementById('brdfCanvas');
+const labelCanvas = document.getElementById('brdfLabels');
+const lctx = labelCanvas.getContext('2d');
+const rSlider = document.getElementById('rSlider');
+const tSlider = document.getElementById('tSlider');
+const rValEl = document.getElementById('rVal');
+const tValEl = document.getElementById('tVal');
+const normCheckbox = document.getElementById('normCheckbox');
+
+let roughness = 0.6;
+let viewTheta = 70 * PI / 180;
+let normalize = true;
+let fixedScale = 0.9 / 0.61;
+let viewW = 0, viewH = 0;
+
+const COLOR_GAMMA = 0.2;         // 색 강도 곡선(<1) → 어두워짐 완화, 밝은 영역 확대
+
+// ---- renderer / scene / camera ----
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setClearColor(0xfdfdfd, 1);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 1000);
+camera.up.set(0, 0, 1);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.70));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.42);
+// v–z 평면(=x-z 평면, y=0) 기준으로 조명을 반사 → 법선이 ±Y 라 Y 성분만 부호 반전.
+dirLight.position.set(2.5, 3, 5);
+scene.add(dirLight);
+
+// ---- 바닥 면 (xy 평면 원반) + 테두리 ----
+scene.add(new THREE.Mesh(
+  new THREE.CircleGeometry(1.0, 96),
+  new THREE.MeshBasicMaterial({ color: 0xe8e8e8, side: THREE.DoubleSide })
+));
+{
+  const pts = [];
+  for (let j = 0; j <= 96; j++) { const a = j / 96 * PI2; pts.push(new THREE.Vector3(Math.cos(a), Math.sin(a), 0)); }
+  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({ color: 0xbbbbbb })));
+}
+
+// ---- 로브 메시 ----
+const positions = new Float32Array(VERT_COUNT * 3);
+const colors = new Float32Array(VERT_COUNT * 3);
+const indices = new Uint32Array(THETA_STEPS * PHI_STEPS * 6);
+{
+  let p = 0;
+  for (let i = 0; i < THETA_STEPS; i++) {
+    for (let j = 0; j < PHI_STEPS; j++) {
+      const v00 = i * PS1 + j, v01 = v00 + 1, v10 = v00 + PS1, v11 = v10 + 1;
+      indices[p++] = v00; indices[p++] = v10; indices[p++] = v11;
+      indices[p++] = v00; indices[p++] = v11; indices[p++] = v01;
+    }
+  }
+}
+const lobeGeo = new THREE.BufferGeometry();
+lobeGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+lobeGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+lobeGeo.setIndex(new THREE.BufferAttribute(indices, 1));
+const lobeMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+scene.add(new THREE.Mesh(lobeGeo, lobeMat));
+
+// sRGB → linear. 렌더러 출력이 sRGB 라 정점색은 linear 로 저장해야 의도한 채도로 표시됨
+// (안 하면 출력 인코딩이 녹/청을 들어올려 빨강이 분홍빛으로 바램).
+function s2l(c) { return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+function colorFor(t, out, o) {
+  // 의도 색(sRGB): 빨강 바닥을 올려(125) 어두운 부분도 밝게, 녹/청은 낮게 유지 → 높은 채도
+  out[o]     = s2l((125 + t * 130) / 255);
+  out[o + 1] = s2l((6 + t * 26) / 255);
+  out[o + 2] = s2l((6 + t * 20) / 255);
+}
+
+function buildLobe() {
+  const vx = Math.sin(viewTheta), vz = Math.cos(viewTheta);   // V = (vx, 0, vz)
+  const a = roughness * roughness, a2 = a * a;
+  const NoV = vz, invPI = 1 / PI;
+  const inten = new Float32Array(VERT_COUNT);
+  let maxVal = 0;
+
   for (let i = 0; i < TS1; i++) {
-    const t = (i / THETA_STEPS) * (PI / 2);
-    sinTheta[i] = Math.sin(t);
-    cosTheta[i] = Math.cos(t);
+    const sT = sinT[i], cT = cosT[i];
+    const NoL = cT, rowOff = i * PS1;
+    if (NoL <= 0 || NoV <= 0) { for (let j = 0; j < PS1; j++) inten[rowOff + j] = 0; continue; }
+    const visV = NoL * Math.sqrt(NoV * (NoV - NoV * a2) + a2);
+    const visL = NoV * Math.sqrt(NoL * (NoL - NoL * a2) + a2);
+    const Vfunc = 0.5 / (visV + visL);
+    for (let j = 0; j < PS1; j++) {
+      const lx = sT * cosP[j], ly = sT * sinP[j], lz = cT;
+      let hx = lx + vx, hy = ly, hz = lz + vz;
+      const hLenSq = hx * hx + hy * hy + hz * hz;
+      if (hLenSq < 1e-12) { inten[rowOff + j] = 0; continue; }
+      const invH = 1 / Math.sqrt(hLenSq);
+      hx *= invH; hy *= invH; hz *= invH;
+      const NoH = hz, VoH = vx * hx + vz * hz;
+      if (NoH <= 0 || VoH <= 0) { inten[rowOff + j] = 0; continue; }
+      const d = NoH * NoH * (a2 - 1) + 1;
+      const D = a2 * invPI / (d * d);
+      const val = D * Vfunc * NoL;
+      inten[rowOff + j] = val;
+      if (val > maxVal) maxVal = val;
+    }
   }
-  for (let j = 0; j < PS1; j++) {
-    const p = (j / PHI_STEPS) * PI2;
-    sinPhi[j] = Math.sin(p);
-    cosPhi[j] = Math.cos(p);
-  }
 
-  const canvas = document.getElementById('brdfCanvas');
-  const ctx = canvas.getContext('2d');
-  const rSlider = document.getElementById('rSlider');
-  const tSlider = document.getElementById('tSlider');
-  const rValEl = document.getElementById('rVal');
-  const tValEl = document.getElementById('tVal');
-
-  let roughness = 0.6;
-  let viewTheta = 70 * PI / 180;
-  let orbitTheta = 130 * PI / 180;
-  let orbitPhi = 20 * PI / 180;
-  let normalize = true;
-  let fixedScale = 0;
-
-  const lobeX = new Float32Array(VERT_COUNT);
-  const lobeY = new Float32Array(VERT_COUNT);
-  const lobeZ = new Float32Array(VERT_COUNT);
-  const lobeIntensity = new Float32Array(VERT_COUNT);
-  let lobeDirty = true;
-
-  const projSX = new Float32Array(VERT_COUNT);
-  const projSY = new Float32Array(VERT_COUNT);
-  const projDepth = new Float32Array(VERT_COUNT);
-
-  const quadOrder = new Int32Array(QUAD_COUNT);
-  const quadDepth = new Float32Array(QUAD_COUNT);
-  const quadColor = new Array(QUAD_COUNT);
-
-  function buildLobe() {
-    const vx = Math.sin(viewTheta), vy = Math.cos(viewTheta);
-    const a = roughness * roughness;
-    const a2 = a * a;
-    const NoV = vy;
-    const invPI = 1 / PI;
-
-    let maxVal = 0;
-
-    for (let i = 0; i < TS1; i++) {
-      const sT = sinTheta[i], cT = cosTheta[i];
-      const NoL = cT;
-      const rowOff = i * PS1;
-
-      if (NoL <= 0 || NoV <= 0) {
-        for (let j = 0; j < PS1; j++) lobeIntensity[rowOff + j] = 0;
-        continue;
-      }
-
-      const visV = NoL * Math.sqrt(NoV * (NoV - NoV * a2) + a2);
-      const visL = NoV * Math.sqrt(NoL * (NoL - NoL * a2) + a2);
-      const Vfunc = 0.5 / (visV + visL);
-
-      for (let j = 0; j < PS1; j++) {
-        const lx = sT * cosPhi[j];
-        const lz = sT * sinPhi[j];
-
-        let hx = lx + vx;
-        let hy = NoL + vy;
-        let hz = lz;
-        const hLenSq = hx*hx + hy*hy + hz*hz;
-        if (hLenSq < 1e-12) { lobeIntensity[rowOff + j] = 0; continue; }
-        const invH = 1 / Math.sqrt(hLenSq);
-        hx *= invH; hy *= invH; hz *= invH;
-
-        const NoH = hy;
-        const VoH = vx*hx + vy*hy;
-        if (NoH <= 0 || VoH <= 0) { lobeIntensity[rowOff + j] = 0; continue; }
-
-        const d = NoH * NoH * (a2 - 1) + 1;
-        const D = a2 * invPI / (d * d);
-
-        const val = D * Vfunc * NoL;
-        lobeIntensity[rowOff + j] = val;
-        if (val > maxVal) maxVal = val;
-      }
-    }
-
-    if (maxVal < 1e-6) {
-      for (let i = 0; i < VERT_COUNT; i++) {
-        lobeX[i] = lobeY[i] = lobeZ[i] = 0;
-        lobeIntensity[i] = 0;
-      }
-      return;
-    }
-
-    if (fixedScale === 0) {
-      fixedScale = 0.9 / 0.61;
-    }
-
+  if (maxVal < 1e-6) {
+    positions.fill(0); colors.fill(0.4);
+  } else {
     const scale = normalize ? (0.9 / maxVal) : fixedScale;
     const invMax = 1 / maxVal;
-
     for (let i = 0; i < TS1; i++) {
-      const sT = sinTheta[i], cT = cosTheta[i];
-      const rowOff = i * PS1;
+      const sT = sinT[i], cT = cosT[i], rowOff = i * PS1;
       for (let j = 0; j < PS1; j++) {
-        const idx = rowOff + j;
-        const val = lobeIntensity[idx];
-        const r = val * scale;
-        lobeX[idx] = sT * cosPhi[j] * r;
-        lobeY[idx] = cT * r;
-        lobeZ[idx] = sT * sinPhi[j] * r;
-        lobeIntensity[idx] = val * invMax;
+        const idx = rowOff + j, o = idx * 3;
+        const r = inten[idx] * scale;
+        positions[o]     = sT * cosP[j] * r;
+        positions[o + 1] = sT * sinP[j] * r;
+        positions[o + 2] = cT * r;
+        colorFor(Math.pow(inten[idx] * invMax, COLOR_GAMMA), colors, o);   // 곡선으로 밝은 영역 확대
       }
     }
   }
+  lobeGeo.attributes.position.needsUpdate = true;
+  lobeGeo.attributes.color.needsUpdate = true;
+  lobeGeo.computeVertexNormals();
+  lobeGeo.computeBoundingSphere();
+}
 
-  let cam_ct, cam_st, cam_cp, cam_sp;
-  let projW, projH, projR;
-  function updateCamera() {
-    cam_cp = Math.cos(orbitPhi);
-    cam_sp = Math.sin(orbitPhi);
-    cam_ct = Math.cos(orbitTheta);
-    cam_st = Math.sin(orbitTheta);
+// ---- 커스텀 화살표 (D_GGX 등 pbr-vis 와 동일: 원기둥 shaft + 원뿔 head, 로컬 +Y 기준) ----
+const ARROW_UP = new THREE.Vector3(0, 1, 0);
+function makeArrow(colorHex, len, headLen, shaftR, headR, seg) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshBasicMaterial({ color: colorHex });
+  const shaftLen = len - headLen;
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(shaftR, shaftR, shaftLen, seg), mat);
+  shaft.position.y = shaftLen * 0.5;
+  const head = new THREE.Mesh(new THREE.ConeGeometry(headR, headLen, seg), mat);
+  head.position.y = shaftLen + headLen * 0.5;
+  g.add(shaft, head);
+  return g;
+}
+function orientArrow(g, dir) { g.quaternion.setFromUnitVectors(ARROW_UP, dir.clone().normalize()); }
+
+// 화살표 전체를 가늘게(shaft 0.007→0.004, ×0.57). 헤드도 같은 비율로 균일 축소해
+// 원래 원뿔 비율(headR:headLen ≈ 0.032:0.14)을 보존 → 모양 그대로, 크기만 작게.
+const nArrow = makeArrow(ACCENT_N_HEX, 1.0, 0.08, 0.004, 0.0183, 24);
+orientArrow(nArrow, new THREE.Vector3(0, 0, 1));
+scene.add(nArrow);
+
+const vArrow = makeArrow(ACCENT_V_HEX, 1.0, 0.08, 0.004, 0.0183, 24);
+scene.add(vArrow);
+
+// v 분해 점선
+const dashMat = new THREE.LineDashedMaterial({ color: ACCENT_V_HEX, dashSize: 0.03, gapSize: 0.022 });
+const vDash = new THREE.Line(new THREE.BufferGeometry(), dashMat);
+scene.add(vDash);
+
+// 라벨 앵커(월드 좌표) — 오버레이 텍스트가 따라감
+const nAnchor = new THREE.Vector3(0, 0, 1.16);
+const vAnchor = new THREE.Vector3();
+
+function updateVectors() {
+  const vx = Math.sin(viewTheta), vz = Math.cos(viewTheta);
+  orientArrow(vArrow, new THREE.Vector3(vx, 0, vz));
+  vAnchor.set(vx * 1.16, 0, vz * 1.16);
+  const pts = [];
+  if (viewTheta > 0.01) {
+    pts.push(new THREE.Vector3(0, 0, 0), new THREE.Vector3(vx, 0, 0),
+             new THREE.Vector3(vx, 0, 0), new THREE.Vector3(vx, 0, vz));
   }
-  function projP(x, y, z) {
-    const yOff = y - LOOK_AT_Y;
-    const x1 = x * cam_ct + z * cam_st;
-    const z1 = -x * cam_st + z * cam_ct;
-    return {
-      sx: projW / 2 + x1 * projR,
-      sy: projH / 2 - (yOff * cam_cp - z1 * cam_sp) * projR,
-      depth: yOff * cam_sp + z1 * cam_cp,
-    };
+  vDash.geometry.setFromPoints(pts);
+  vDash.geometry.computeBoundingSphere();
+  if (pts.length) vDash.computeLineDistances();
+  vDash.visible = pts.length > 0;
+}
+
+// ---- 라벨 오버레이 (2D 캔버스, 고해상 텍스트) ----
+const _p = new THREE.Vector3();
+function drawLabelAt(anchor, text, color) {
+  _p.copy(anchor).project(camera);
+  if (_p.z > 1) return;   // 카메라 뒤
+  const x = (_p.x * 0.5 + 0.5) * viewW;
+  const y = (-_p.y * 0.5 + 0.5) * viewH;
+  lctx.fillStyle = color;
+  lctx.fillText(text, x, y);
+}
+function drawLabels() {
+  lctx.clearRect(0, 0, viewW, viewH);
+  lctx.font = '600 16px SUIT, sans-serif';
+  lctx.textAlign = 'center';
+  lctx.textBaseline = 'middle';
+  drawLabelAt(nAnchor, 'n', ACCENT_N);
+  drawLabelAt(vAnchor, 'v', ACCENT_V);
+}
+
+// ---- 카메라 (구면 좌표 + 관성) ----
+//   v 가 화면 왼쪽에 오도록 azimuth 를 잡음(원본과 동일 배치; RH 씬 기준).
+let orbitAz = -0.7 + PI;
+let orbitEl = 0.2;   // 카메라 높이 ↓ (타깃 유지 → 약간 위를 봄)
+const EL_MAX = 1.45, EL_MIN = 0.05;
+function updateCamera() {
+  const ce = Math.cos(orbitEl), se = Math.sin(orbitEl);
+  camera.position.set(
+    CAM_DIST * ce * Math.cos(orbitAz),
+    CAM_DIST * ce * Math.sin(orbitAz),
+    TARGET_Z + CAM_DIST * se
+  );
+  camera.lookAt(0, 0, TARGET_Z);
+}
+function render() {
+  updateCamera();
+  renderer.render(scene, camera);
+  drawLabels();
+}
+
+// ---- 컨트롤 ----
+rSlider.addEventListener('input', () => {
+  roughness = +rSlider.value / 100;
+  rValEl.textContent = roughness.toFixed(2);
+  buildLobe(); render();
+});
+tSlider.addEventListener('input', () => {
+  viewTheta = +tSlider.value * PI / 180;
+  tValEl.textContent = tSlider.value + '°';
+  buildLobe(); updateVectors(); render();
+});
+normCheckbox.addEventListener('change', () => {
+  normalize = normCheckbox.checked;
+  buildLobe(); render();
+});
+
+// ---- 적응형 FOV resize (WebGL + 라벨 오버레이 동시) ----
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+  viewW = w; viewH = h;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  renderer.setPixelRatio(dpr);
+  renderer.setSize(w, h, false);
+  labelCanvas.width = w * dpr;
+  labelCanvas.height = h * dpr;
+  lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const aspect = w / h;
+  camera.aspect = aspect;
+  const vfov = aspect >= 1 ? BASE_FOV : 2 * Math.atan(Math.tan(BASE_FOV / 2) / aspect);
+  camera.fov = vfov * 180 / PI;
+  camera.updateProjectionMatrix();
+  render();
+}
+
+// ---- 드래그 + 2축 관성 ----
+const DAMP = 10, VEL_MIN = 0.15;
+let dragging = false, prevX = 0, prevY = 0, lastMoveT = 0;
+let vAz = 0, vEl = 0, prevT = performance.now();
+
+function tick(now) {
+  const dt = Math.min((now - prevT) / 1000, 0.1);
+  prevT = now;
+  if (!dragging && (Math.abs(vAz) > VEL_MIN || Math.abs(vEl) > VEL_MIN)) {
+    orbitAz += vAz * dt;
+    const newEl = orbitEl + vEl * dt;
+    if (newEl <= EL_MIN)      { orbitEl = EL_MIN; vEl = 0; }
+    else if (newEl >= EL_MAX) { orbitEl = EL_MAX; vEl = 0; }
+    else                      { orbitEl = newEl; }
+    vAz *= Math.exp(-dt * DAMP);
+    vEl *= Math.exp(-dt * DAMP);
+    if (Math.abs(vAz) <= VEL_MIN) vAz = 0;
+    if (Math.abs(vEl) <= VEL_MIN) vEl = 0;
+    render();
   }
-  function projectLobeBatch() {
-    const halfW = projW / 2, halfH = projH / 2;
-    for (let i = 0; i < VERT_COUNT; i++) {
-      const x = lobeX[i], y = lobeY[i], z = lobeZ[i];
-      const yOff = y - LOOK_AT_Y;
-      const x1 = x * cam_ct + z * cam_st;
-      const z1 = -x * cam_st + z * cam_ct;
-      projSX[i] = halfW + x1 * projR;
-      projSY[i] = halfH - (yOff * cam_cp - z1 * cam_sp) * projR;
-      projDepth[i] = yOff * cam_sp + z1 * cam_cp;
-    }
-  }
+  requestAnimationFrame(tick);
+}
 
-  function prepareQuads() {
-    for (let i = 0; i < THETA_STEPS; i++) {
-      const rowOff = i * PHI_STEPS;
-      const vRow = i * PS1;
-      const vRowNext = vRow + PS1;
-      for (let j = 0; j < PHI_STEPS; j++) {
-        const qi = rowOff + j;
-        const v00 = vRow + j;
-        const v01 = v00 + 1;
-        const v10 = vRowNext + j;
-        const v11 = v10 + 1;
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true; vAz = 0; vEl = 0;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = performance.now();
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const mt = performance.now();
+  const dtMove = Math.max((mt - lastMoveT) / 1000, 1e-3);
+  const dAz = -(e.clientX - prevX) * 0.008;
+  const newEl = orbitEl + (e.clientY - prevY) * 0.008;
+  const clampedEl = Math.max(EL_MIN, Math.min(EL_MAX, newEl));
+  const dEl = clampedEl - orbitEl;
+  orbitAz += dAz; orbitEl = clampedEl;
+  vAz = dAz / dtMove; vEl = dEl / dtMove;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = mt;
+  render();
+});
+const endDrag = () => {
+  if (!dragging) return;
+  dragging = false;
+  if (performance.now() - lastMoveT > 100) { vAz = 0; vEl = 0; }
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointerleave', endDrag);
 
-        quadDepth[qi] = (projDepth[v00] + projDepth[v01] + projDepth[v10] + projDepth[v11]) * 0.25;
-        const t = (lobeIntensity[v00] + lobeIntensity[v01] + lobeIntensity[v10] + lobeIntensity[v11]) * 0.25;
-        const r = 100 + ((t * 155) | 0);
-        const g = 20 + ((t * 40) | 0);
-        const b = 20 + ((t * 40) | 0);
-        quadColor[qi] = 'rgb(' + r + ',' + g + ',' + b + ')';
-        quadOrder[qi] = qi;
-      }
-    }
+window.addEventListener('resize', resize);
+if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
 
-    const idx = Array.from(quadOrder);
-    idx.sort((a, b) => quadDepth[a] - quadDepth[b]);
-    for (let i = 0; i < QUAD_COUNT; i++) quadOrder[i] = idx[i];
-  }
-
-  function drawLobe() {
-    let lastColor = '';
-    for (let k = 0; k < QUAD_COUNT; k++) {
-      const qi = quadOrder[k];
-      const i = (qi / PHI_STEPS) | 0;
-      const j = qi - i * PHI_STEPS;
-      const v00 = i * PS1 + j;
-      const v01 = v00 + 1;
-      const v10 = v00 + PS1;
-      const v11 = v10 + 1;
-
-      const color = quadColor[qi];
-      if (color !== lastColor) {
-        ctx.fillStyle = color;
-        ctx.strokeStyle = color;
-        lastColor = color;
-      }
-      ctx.lineWidth = 0.5;
-      ctx.beginPath();
-      ctx.moveTo(projSX[v00], projSY[v00]);
-      ctx.lineTo(projSX[v01], projSY[v01]);
-      ctx.lineTo(projSX[v11], projSY[v11]);
-      ctx.lineTo(projSX[v10], projSY[v10]);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    }
-  }
-
-  function drawPlane() {
-    const c = projP(0, 0, 0);
-    const e1 = projP(1, 0, 0);
-    const e2 = projP(0, 0, 1);
-    const ax = e1.sx - c.sx, ay = e1.sy - c.sy;
-    const bx = e2.sx - c.sx, by = e2.sy - c.sy;
-
-    ctx.save();
-    ctx.translate(c.sx, c.sy);
-    ctx.transform(ax / projR, ay / projR, bx / projR, by / projR, 0, 0);
-    ctx.beginPath();
-    ctx.arc(0, 0, projR, 0, PI2);
-    ctx.restore();
-    ctx.fillStyle = PLANE;
-    ctx.fill();
-    ctx.strokeStyle = '#bbb';
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-  }
-
-  function drawArrow(from, to, color) {
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineWidth = 1.8;
-    ctx.beginPath();
-    ctx.moveTo(from.sx, from.sy);
-    ctx.lineTo(to.sx, to.sy);
-    ctx.stroke();
-
-    const dx = to.sx - from.sx, dy = to.sy - from.sy;
-    const len = Math.hypot(dx, dy);
-    if (len < 1) return;
-    const ux = dx / len, uy = dy / len;
-    const s = 6;
-    ctx.beginPath();
-    ctx.moveTo(to.sx, to.sy);
-    ctx.lineTo(to.sx - ux*s - uy*s*0.5, to.sy - uy*s + ux*s*0.5);
-    ctx.lineTo(to.sx - ux*s + uy*s*0.5, to.sy - uy*s - ux*s*0.5);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  function drawLabel(p, text, color) {
-    ctx.fillStyle = color;
-    ctx.fillText(text, p.sx, p.sy);
-  }
-
-  function drawVectors() {
-    ctx.font = '600 14px SUIT, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    const origin = projP(0, 0, 0);
-    drawArrow(origin, projP(0, 1.0, 0), ACCENT_N);
-    drawLabel(projP(0, 1.15, 0), 'n', ACCENT_N);
-
-    const vx = Math.sin(viewTheta), vy = Math.cos(viewTheta);
-
-    if (viewTheta > 0.01) {
-      const vTip = projP(vx, vy, 0);
-      const vGround = projP(vx, 0, 0);
-      ctx.save();
-      ctx.strokeStyle = ACCENT_V;
-      ctx.lineWidth = 1.0;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(vTip.sx, vTip.sy);
-      ctx.lineTo(vGround.sx, vGround.sy);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(origin.sx, origin.sy);
-      ctx.lineTo(vGround.sx, vGround.sy);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    drawArrow(origin, projP(vx, vy, 0), ACCENT_V);
-    drawLabel(projP(vx * 1.15, vy * 1.15, 0), 'v', ACCENT_V);
-  }
-
-  function draw() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    projW = canvas.clientWidth;
-    projH = canvas.clientHeight;
-    if (projW === 0 || projH === 0) return;
-    projR = Math.min(projW, projH) * 0.5;
-
-    canvas.width = projW * dpr;
-    canvas.height = projH * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, projW, projH);
-
-    if (lobeDirty) {
-      buildLobe();
-      lobeDirty = false;
-    }
-    updateCamera();
-    projectLobeBatch();
-    prepareQuads();
-
-    drawPlane();
-    drawLobe();
-    drawVectors();
-  }
-
-  rSlider.addEventListener('input', () => {
-    roughness = +rSlider.value / 100;
-    rValEl.textContent = roughness.toFixed(2);
-    lobeDirty = true;
-    draw();
-  });
-  tSlider.addEventListener('input', () => {
-    viewTheta = +tSlider.value * PI / 180;
-    tValEl.textContent = tSlider.value + '°';
-    lobeDirty = true;
-    draw();
-  });
-
-  const normCheckbox = document.getElementById('normCheckbox');
-  normCheckbox.addEventListener('change', () => {
-    normalize = normCheckbox.checked;
-    lobeDirty = true;
-    draw();
-  });
-
-  // ---- 드래그 + 관성 (2축) ----
-  const PHI_MIN = 0.05, PHI_MAX = PI / 2 - 0.05;
-  const DAMP = 10;        // 관성 감쇠 (클수록 빨리 멈춤)
-  const VEL_MIN = 0.15;   // 이 속도 이하 → 관성 종료
-  let dragging = false, prevX = 0, prevY = 0, lastMoveT = 0;
-  let vT = 0, vP = 0;     // 각속도 (rad/s)
-  let inertiaActive = false, prevTickT = 0;
-
-  function tickInertia(now) {
-    const dt = Math.min((now - prevTickT) / 1000, 0.1);
-    prevTickT = now;
-    orbitTheta += vT * dt;
-    const newPhi = orbitPhi + vP * dt;
-    if (newPhi <= PHI_MIN)      { orbitPhi = PHI_MIN; vP = 0; }   // 클램프에 닿으면 축 속도 정지
-    else if (newPhi >= PHI_MAX) { orbitPhi = PHI_MAX; vP = 0; }
-    else                        { orbitPhi = newPhi; }
-    vT *= Math.exp(-dt * DAMP);
-    vP *= Math.exp(-dt * DAMP);
-    draw();
-    if (Math.abs(vT) < VEL_MIN && Math.abs(vP) < VEL_MIN) {
-      vT = 0; vP = 0;
-      inertiaActive = false;
-      return;
-    }
-    requestAnimationFrame(tickInertia);
-  }
-  function startInertia() {
-    if (inertiaActive) return;
-    if (Math.abs(vT) < VEL_MIN && Math.abs(vP) < VEL_MIN) return;
-    inertiaActive = true;
-    prevTickT = performance.now();
-    requestAnimationFrame(tickInertia);
-  }
-
-  canvas.addEventListener('pointerdown', (e) => {
-    dragging = true;
-    vT = 0; vP = 0;          // 새 드래그 → 진행 중 관성 즉시 중단
-    inertiaActive = false;
-    prevX = e.clientX; prevY = e.clientY;
-    lastMoveT = performance.now();
-    canvas.setPointerCapture(e.pointerId);
-  });
-  canvas.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const mt = performance.now();
-    const dt = Math.max((mt - lastMoveT) / 1000, 1e-3);
-    const dT = (e.clientX - prevX) * 0.008;
-    const newPhi = orbitPhi + (e.clientY - prevY) * 0.008;
-    const clampedPhi = Math.max(PHI_MIN, Math.min(PHI_MAX, newPhi));
-    const dP = clampedPhi - orbitPhi;   // 클램프 후 실제 이동량 (관성 누적 방지)
-    orbitTheta += dT;
-    orbitPhi = clampedPhi;
-    vT = dT / dt;
-    vP = dP / dt;
-    prevX = e.clientX; prevY = e.clientY;
-    lastMoveT = mt;
-    draw();
-  });
-  const endDrag = () => {
-    if (!dragging) return;
-    dragging = false;
-    if (performance.now() - lastMoveT > 100) { vT = 0; vP = 0; }   // 멈춘 채 놓으면 관성 없음
-    startInertia();
-  };
-  canvas.addEventListener('pointerup', endDrag);
-  canvas.addEventListener('pointerleave', endDrag);
-
-  window.addEventListener('resize', draw);
-  if (window.ResizeObserver) {
-    new ResizeObserver(draw).observe(canvas);
-  }
-  draw();
-})();
+// ---- init ----
+buildLobe();
+updateVectors();
+resize();
+requestAnimationFrame(tick);
 </script>
 
 </body>
