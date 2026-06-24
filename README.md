@@ -14,22 +14,22 @@
 - [Multi Scattering](https://mstone8370.github.io/blog-widgets/Graphics/PBR/Multi_Scattering_Visualizer.html)
 
 ### Diffuse IBL
-- [Cosine Sampling](https://mstone8370.github.io/blog-widgets/Graphics/DiffuseIBL/Cosine_Sampling_Visualizer.html)
-- [Irradiance Map](https://mstone8370.github.io/blog-widgets/Graphics/DiffuseIBL/Irradiance_Sphere_Visualizer.html)
-- [SH Irradiance](https://mstone8370.github.io/blog-widgets/Graphics/DiffuseIBL/SH_Irradiance_Visualizer.html)
+- [Cosine Sampling](https://mstone8370.github.io/blog-widgets/Graphics/IBL/DiffuseIBL/Cosine_Sampling_Visualizer.html)
+- [Irradiance Map](https://mstone8370.github.io/blog-widgets/Graphics/IBL/DiffuseIBL/Irradiance_Sphere_Visualizer.html)
+- [SH Irradiance](https://mstone8370.github.io/blog-widgets/Graphics/IBL/DiffuseIBL/SH_Irradiance_Visualizer.html)
 
 ### 구면 조화 (SH)
 - [SH 밴드별 주파수](https://mstone8370.github.io/blog-widgets/Graphics/SH/SH_Bands_Visualizer.html)
 - [SH 밴드 분해 · 누적 (단일 구)](https://mstone8370.github.io/blog-widgets/Graphics/SH/SH_Reconstruction_Visualizer.html)
 
 ### Specular IBL · 샘플링
-- [Monte Carlo](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Monte_Carlo_Visualizer.html)
-- [Monte Carlo (Hammersley)](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Monte_Carlo_Hammersley_Visualizer.html)
-- [GGX Sampling](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/GGX_Sampling_Visualizer.html)
-- [BRDF Lobe](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/BRDF_Lobe_Visualizer.html)
-- [Specular IBL](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Specular_IBL_Visualizer.html)
-- [Full IBL (Diffuse + Specular)](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Full_IBL_Visualizer.html)
-- [Helmet IBL (FBX 모델)](https://mstone8370.github.io/blog-widgets/Graphics/SpecularIBL/Helmet_IBL_Visualizer.html)
+- [Monte Carlo](https://mstone8370.github.io/blog-widgets/Graphics/IBL/SpecularIBL/Monte_Carlo_Visualizer.html)
+- [Monte Carlo (Hammersley)](https://mstone8370.github.io/blog-widgets/Graphics/IBL/SpecularIBL/Monte_Carlo_Hammersley_Visualizer.html)
+- [GGX Sampling](https://mstone8370.github.io/blog-widgets/Graphics/IBL/SpecularIBL/GGX_Sampling_Visualizer.html)
+- [BRDF Lobe](https://mstone8370.github.io/blog-widgets/Graphics/IBL/SpecularIBL/BRDF_Lobe_Visualizer.html)
+- [Specular IBL](https://mstone8370.github.io/blog-widgets/Graphics/IBL/SpecularIBL/Specular_IBL_Visualizer.html)
+- [Full IBL (Diffuse + Specular)](https://mstone8370.github.io/blog-widgets/Graphics/IBL/Full_IBL_Visualizer.html)
+- [Helmet IBL (FBX 모델)](https://mstone8370.github.io/blog-widgets/Graphics/IBL/Helmet_IBL_Visualizer.html)
 
 ## 사용 방법
  

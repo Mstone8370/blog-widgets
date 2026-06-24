@@ -123,9 +123,9 @@
 <script type="module">
 /*
  * Diffuse IBL + Specular IBL 합산 시각화 (split-sum). 기존 두 위젯의 자산을 그대로 재사용:
- *   - 디퓨즈: irradiance 큐브맵(E/π)  ../DiffuseIBL/Irradiance/{면}_0.hdr (HDR)
- *   - 스페큘러: prefiltered 환경 큐브맵 10밉 ./Prefiltered/{면}_{lod}.hdr + environment BRDF LUT
- *   - 배경: 원본 환경맵 ../DiffuseIBL/Cubemap (gamma PNG)
+ *   - 디퓨즈: irradiance 큐브맵(E/π)  ./DiffuseIBL/Irradiance/{면}_0.hdr (HDR)
+ *   - 스페큘러: prefiltered 환경 큐브맵 10밉 ./SpecularIBL/Prefiltered/{면}_{lod}.hdr + environment BRDF LUT
+ *   - 배경: 원본 환경맵 ./DiffuseIBL/Cubemap (gamma PNG)
  *
  * Metallic 워크플로우로 BaseColor/Metallic/Roughness 를 받아 단순 합산:
  *   diffuseColor = BaseColor * (1 - Metallic)        // 금속은 디퓨즈 없음
@@ -188,7 +188,7 @@ function makeCube(texs) {
 }
 
 // ---- 디퓨즈: irradiance 큐브맵 (E/π, 1레벨) ----
-Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync('../DiffuseIBL/Irradiance/' + f + '_0.hdr')))
+Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync('./DiffuseIBL/Irradiance/' + f + '_0.hdr')))
   .then((texs) => { sphereMat.uniforms.uIrradiance.value = makeCube(texs); render(); })
   .catch((err) => console.error('irradiance load failed:', err));
 
@@ -196,7 +196,7 @@ Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync('../DiffuseIBL/Irradiance/'
 // 6면 × 10레벨(512²→1²) → level0=image, level1..9=mipmaps. textureCubeLodEXT 로 LOD 샘플.
 Promise.all(
   Array.from({ length: 10 }, (_, m) =>
-    Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync(`./Prefiltered/${f}_${m}.hdr`)))
+    Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync(`./SpecularIBL/Prefiltered/${f}_${m}.hdr`)))
   )
 ).then((levels) => {
   const cube = new THREE.CubeTexture(levels[0]);
@@ -214,7 +214,7 @@ Promise.all(
 
 // ---- environment BRDF LUT (2D, R=scale G=bias, 선형 데이터) ----
 const lutTex = new EXRLoader().setDataType(THREE.HalfFloatType)
-  .load('./EnvironmentBRDF.exr', () => render());
+  .load('./SpecularIBL/EnvironmentBRDF.exr', () => render());
 lutTex.colorSpace = THREE.LinearSRGBColorSpace;
 lutTex.minFilter = THREE.LinearFilter;
 lutTex.magFilter = THREE.LinearFilter;
@@ -230,7 +230,7 @@ const CUBE_GLSL = `
 
 // ---- 배경 스카이박스 (원본 환경맵, gamma PNG) ----
 const envTex = new THREE.CubeTextureLoader()
-  .setPath('../DiffuseIBL/Cubemap/')
+  .setPath('./DiffuseIBL/Cubemap/')
   .load(['Xp.png', 'Xm.png', 'Yp.png', 'Ym.png', 'Zp.png', 'Zm.png'], () => render());
 envTex.colorSpace = THREE.LinearSRGBColorSpace;
 envTex.flipY = false;

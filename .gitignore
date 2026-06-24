@@ -12,6 +12,6 @@ __pycache__/
 
 # 큐브맵 float 원본 (sRGB PNG 재인코딩 소스, git 업로드 제외)
 *.exr
-Graphics/SpecularIBL/Prefiltered_src/
+Graphics/IBL/SpecularIBL/Prefiltered_src/
 # 단, 환경 BRDF LUT 은 위젯이 런타임에 로드하는 자산이라 EXR 을 커밋
-!Graphics/SpecularIBL/EnvironmentBRDF.exr
+!Graphics/IBL/SpecularIBL/EnvironmentBRDF.exr

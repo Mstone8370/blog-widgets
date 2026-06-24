@@ -133,7 +133,7 @@ import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
-import { SH_DIFFUSE_COEFFS } from '../DiffuseIBL/sh_coeffs.js';
+import { SH_DIFFUSE_COEFFS } from './DiffuseIBL/sh_coeffs.js';
 
 const PI = Math.PI;
 const GAMMA = 2.2;
@@ -173,7 +173,7 @@ const FACE_NAMES = ['Xp', 'Xm', 'Yp', 'Ym', 'Zp', 'Zm'];
 // three 의 DataTexture 큐브 업로드가 texture.mipmaps[j].image[i] 를 레벨 j+1 로 올린다.
 Promise.all(
   Array.from({ length: 10 }, (_, m) =>
-    Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync(`./Prefiltered/${f}_${m}.hdr`)))
+    Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync(`./SpecularIBL/Prefiltered/${f}_${m}.hdr`)))
   )
 ).then((levels) => {
   const cube = new THREE.CubeTexture(levels[0]);                 // level 0 (512²)
@@ -191,7 +191,7 @@ Promise.all(
 
 // ---- environment BRDF LUT (R=scale, G=bias, 선형 데이터) ----
 const lutTex = new EXRLoader().setDataType(THREE.HalfFloatType)
-  .load('./EnvironmentBRDF.exr', () => render());
+  .load('./SpecularIBL/EnvironmentBRDF.exr', () => render());
 lutTex.colorSpace = THREE.LinearSRGBColorSpace;
 lutTex.minFilter = THREE.LinearFilter;
 lutTex.magFilter = THREE.LinearFilter;
@@ -200,7 +200,7 @@ lutTex.wrapT = THREE.ClampToEdgeWrapping;
 lutTex.generateMipmaps = false;
 
 // ---- helmet 텍스처 (./Helmet/Helmet.fbm) ----
-const texLoader = new THREE.TextureLoader().setPath('./Helmet/Helmet.fbm/');
+const texLoader = new THREE.TextureLoader().setPath('./SpecularIBL/Helmet/Helmet.fbm/');
 function loadTex(name) {
   const t = texLoader.load(name, () => render());
   t.anisotropy = maxAniso;
@@ -224,7 +224,7 @@ const CUBE_GLSL = `
 
 // ---- 배경 스카이박스 (원본 환경맵, gamma PNG) ----
 const envTex = new THREE.CubeTextureLoader()
-  .setPath('../DiffuseIBL/Cubemap/')
+  .setPath('./DiffuseIBL/Cubemap/')
   .load(['Xp.png', 'Xm.png', 'Yp.png', 'Ym.png', 'Zp.png', 'Zm.png'], () => render());
 envTex.colorSpace = THREE.LinearSRGBColorSpace;
 envTex.flipY = false;
@@ -359,7 +359,7 @@ yawGroup.add(pitchGroup);
 scene.add(yawGroup);
 
 // ---- 모델 로드 (FBX) ----
-new FBXLoader().load('./Helmet/Helmet.fbx', (obj) => {
+new FBXLoader().load('./SpecularIBL/Helmet/Helmet.fbx', (obj) => {
   obj.traverse((c) => { if (c.isMesh) { c.material = helmetMat; c.frustumCulled = false; } });
   obj.rotation.x = MODEL_UP_FIX;                 // Y-up → Z-up
   const box = new THREE.Box3().setFromObject(obj);
