@@ -28,7 +28,9 @@
 - [GGX Sampling](https://mstone8370.github.io/blog-widgets/Graphics/IBL/SpecularIBL/GGX_Sampling_Visualizer.html)
 - [BRDF Lobe](https://mstone8370.github.io/blog-widgets/Graphics/IBL/SpecularIBL/BRDF_Lobe_Visualizer.html)
 - [Specular IBL](https://mstone8370.github.io/blog-widgets/Graphics/IBL/SpecularIBL/Specular_IBL_Visualizer.html)
-- [Full IBL (Diffuse + Specular)](https://mstone8370.github.io/blog-widgets/Graphics/IBL/Full_IBL_Visualizer.html)
+
+### IBL 통합 (Diffuse + Specular)
+- [Full IBL](https://mstone8370.github.io/blog-widgets/Graphics/IBL/Full_IBL_Visualizer.html)
 - [Helmet IBL (FBX 모델)](https://mstone8370.github.io/blog-widgets/Graphics/IBL/Helmet_IBL_Visualizer.html)
 
 ## 사용 방법
