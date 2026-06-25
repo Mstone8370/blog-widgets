@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .fse-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .fse-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .fse-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+  }
+  .fse-vis .legend {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    font-size: 14.5px;
+    color: #666;
+    background: rgba(255, 255, 255, 0.78);
+    border: 1px solid #ececec;
+    border-radius: 4px;
+    padding: 5px 8px;
+    line-height: 1.55;
+    pointer-events: none;
+  }
+  .fse-vis .legend .sum { color: #2052BB; font-weight: 600; }
+  .fse-vis .legend .target { color: #999; font-weight: 600; }
+
+  .fse-vis .controls {
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 70px 1fr 44px 64px;
+    align-items: center;
+    gap: 10px 12px;
+    flex-shrink: 0;
+  }
+  .fse-vis .label { font-size: 16.5px; color: #444; }
+  .fse-vis .label i { color: #2052BB; }
+  .fse-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 16.5px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .fse-vis input[type=range] {
+    width: 100%;
+    accent-color: #2052BB;
+  }
+  .fse-vis .playbtn {
+    border: 1px solid #d4d4d8;
+    border-radius: 6px;
+    background: #2052BB;
+    color: #fff;
+    font-family: 'SUIT', sans-serif;
+    font-size: 15.5px;
+    padding: 6px 0;
+    cursor: pointer;
+  }
+  .fse-vis .segment {
+    grid-column: 1 / -1;
+    display: flex;
+    border: 1px solid #d4d4d8;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .fse-vis .segment button {
+    flex: 1;
+    border: none;
+    border-right: 1px solid #e3e3e6;
+    background: #fff;
+    padding: 7px 4px;
+    font-family: 'SUIT', sans-serif;
+    font-size: 15.5px;
+    color: #555;
+    cursor: pointer;
+  }
+  .fse-vis .segment button:last-child { border-right: none; }
+  .fse-vis .segment button.active { background: #2052BB; color: #fff; }
+</style>
+</head>
+<body>
+
+<div class="fse-vis">
+  <div class="canvas-wrap">
+    <canvas id="fseCanvas"></canvas>
+    <div class="legend">
+      회전 벡터 합 → <span class="sum">파형</span> · <span class="target">목표</span><br>
+      <span id="selInfo">사각파 · N = 8</span>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="label">항 <i>N</i></div>
+    <input type="range" id="nSlider" min="1" max="20" step="1" value="8">
+    <div class="value" id="nVal">8</div>
+    <button class="playbtn" id="playBtn">일시정지</button>
+
+    <div class="label">속도</div>
+    <input type="range" id="speedSlider" min="0.1" max="3" step="0.1" value="1">
+    <div class="value" id="speedVal">1.0×</div>
+    <span></span>
+
+    <div class="segment" id="presetSeg">
+      <button data-preset="square" class="active">사각파</button>
+      <button data-preset="sawtooth">톱니파</button>
+      <button data-preset="triangle">삼각파</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+ * 푸리에 "급수"의 에피사이클(회전 벡터) 표현. 부분합 위젯의 보조 뷰.
+ * 각 항 b_n sin(n t) 를, 진폭 b_n / 각속도 n 으로 회전하는 벡터 하나로 본다.
+ * 벡터들을 머리-꼬리로 이으면 끝점(펜)의 세로 성분 = Σ b_n sin(n t) = 부분합 S_N(t).
+ * 그 세로값을 시간 축(오른쪽 패널, 한 주기 [0,2π])에 찍으면 파형이 그려진다.
+ *
+ * 프리셋(진폭 1, 주기 2π, 모두 홀함수 → 순수 사인 급수):
+ *   사각파 (4/π)Σ_{홀} sin/n · 톱니파 (2/π)Σ(-1)^{n+1}sin/n · 삼각파 (8/π²)Σ_{홀}(-1)^{(n-1)/2}sin/n²
+ *
+ * 푸리에 변환이 아니라 급수: 주파수는 정수 n 의 이산값. 좌: 회전 벡터, 우: 그려지는 파형.
+ * 순수 Canvas 2D. 클래스 프리픽스 .fse-vis.
+ */
+(function() {
+  const PI = Math.PI;
+  const TWO_PI = 2 * PI;
+
+  const COL_SUM    = '#2052BB';
+  const COL_TARGET = '#bcbcbc';
+  const COL_CIRCLE = '#dcdce2';
+  const COL_VEC    = '#9aa0ad';
+  const COL_AXIS   = '#888';
+  const Y_RANGE = 1.35;
+
+  const canvas = document.getElementById('fseCanvas');
+  const ctx = canvas.getContext('2d');
+  const nSlider = document.getElementById('nSlider');
+  const nValEl = document.getElementById('nVal');
+  const speedSlider = document.getElementById('speedSlider');
+  const speedValEl = document.getElementById('speedVal');
+  const playBtn = document.getElementById('playBtn');
+  const presetSeg = document.getElementById('presetSeg');
+  const selInfoEl = document.getElementById('selInfo');
+
+  let N = parseInt(nSlider.value);
+  let speed = parseFloat(speedSlider.value);
+  let preset = 'square';
+  let playing = true;
+  let t = 0;            // 위상(라디안), 계속 증가
+  let lastPhase = 0;
+  let trace = [];       // 현재 주기 동안 그린 파형 점 {x, y}
+
+  const PRESET_NAME = { square: '사각파', sawtooth: '톱니파', triangle: '삼각파' };
+
+  function bn(n) {
+    if (preset === 'square')   return (n % 2 === 1) ? 4 / (PI * n) : 0;
+    if (preset === 'sawtooth') return (2 / PI) * (n % 2 === 1 ? 1 : -1) / n;
+    if (n % 2 === 0) return 0;
+    const s = (((n - 1) / 2) % 2 === 0) ? 1 : -1;
+    return (8 / (PI * PI)) * s / (n * n);
+  }
+  function target(tt) {
+    if (preset === 'square')   return Math.sign(Math.sin(tt));
+    if (preset === 'triangle') return (2 / PI) * Math.asin(Math.sin(tt));
+    let x = ((tt + PI) % TWO_PI + TWO_PI) % TWO_PI - PI;
+    return x / PI;
+  }
+
+  // ---- 레이아웃 ----
+  let ex, ey, leftR, px0, panelW, amp;
+  function layout(w, h) {
+    const mT = 14, mB = 24, mL = 10, mR = 14, gap = 14;
+    const top = mT, bot = h - mB;
+    const plotH = bot - top;
+    ey = (top + bot) / 2;
+    const leftD = Math.min(plotH, w * 0.5);
+    leftR = leftD / 2;
+    ex = mL + leftR;
+    px0 = mL + 2 * leftR + gap;
+    panelW = Math.max(20, w - px0 - mR);
+    // 진폭 스케일: 회전 벡터 최대 도달거리 Σ|b_n| 와 세로 여유 둘 다 들어가게
+    let reach = 0;
+    for (let n = 1; n <= N; n++) reach += Math.abs(bn(n));
+    reach = Math.max(reach, 0.2);
+    amp = Math.min((leftR - 6) / reach, (plotH / 2 - 6) / Y_RANGE);
+  }
+
+  function drawPanelAxes() {
+    ctx.strokeStyle = '#ededed';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const v of [-1, 1]) {
+      const y = ey - v * amp;
+      ctx.moveTo(px0, y); ctx.lineTo(px0 + panelW, y);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = COL_AXIS;
+    ctx.beginPath();
+    ctx.moveTo(px0, ey); ctx.lineTo(px0 + panelW, ey);
+    ctx.stroke();
+  }
+
+  function drawTargetCurve() {
+    ctx.strokeStyle = COL_TARGET;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    let prev = null, started = false;
+    const STEP = 256;
+    for (let i = 0; i <= STEP; i++) {
+      const ph = (i / STEP) * TWO_PI;
+      const v = target(ph);
+      if (started && Math.abs(v - prev) > 0.6) { ctx.stroke(); ctx.beginPath(); started = false; }
+      const X = px0 + (ph / TWO_PI) * panelW;
+      const Y = ey - Math.max(-Y_RANGE, Math.min(Y_RANGE, v)) * amp;
+      if (!started) { ctx.moveTo(X, Y); started = true; } else ctx.lineTo(X, Y);
+      prev = v;
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function frame(w, h) {
+    ctx.clearRect(0, 0, w, h);
+    layout(w, h);
+    drawPanelAxes();
+    drawTargetCurve();
+
+    // ---- 회전 벡터 체인 ----
+    let cx = 0, cy = 0;   // 데이터 좌표(단위) 누적
+    ctx.lineWidth = 1;
+    for (let n = 1; n <= N; n++) {
+      const a = bn(n);
+      if (a === 0) continue;
+      const r = Math.abs(a) * amp;
+      const sxC = ex + cx * amp, syC = ey - cy * amp;
+      // 원
+      ctx.strokeStyle = COL_CIRCLE;
+      ctx.beginPath();
+      ctx.arc(sxC, syC, r, 0, TWO_PI);
+      ctx.stroke();
+      // 벡터
+      const nx = cx + a * Math.cos(n * t);
+      const ny = cy + a * Math.sin(n * t);
+      const sxN = ex + nx * amp, syN = ey - ny * amp;
+      ctx.strokeStyle = COL_VEC;
+      ctx.beginPath();
+      ctx.moveTo(sxC, syC); ctx.lineTo(sxN, syN);
+      ctx.stroke();
+      cx = nx; cy = ny;
+    }
+    // 펜(끝점) 위치
+    const tipScreenX = ex + cx * amp;
+    const tipScreenY = ey - cy * amp;
+    const phase = ((t % TWO_PI) + TWO_PI) % TWO_PI;
+    const penX = px0 + (phase / TWO_PI) * panelW;
+    const penY = tipScreenY;
+
+    // 주기 경계에서 트레이스 초기화
+    if (phase < lastPhase) trace = [];
+    lastPhase = phase;
+    trace.push({ x: penX, y: penY });
+
+    // 파형 트레이스
+    ctx.strokeStyle = COL_SUM;
+    ctx.lineWidth = 2.2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < trace.length; i++) {
+      const p = trace[i];
+      if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+
+    // 끝점 → 펜 수평 연결선
+    ctx.strokeStyle = 'rgba(32,82,187,0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(tipScreenX, tipScreenY); ctx.lineTo(penX, penY);
+    ctx.stroke();
+    // 끝점 점
+    ctx.fillStyle = COL_SUM;
+    ctx.beginPath(); ctx.arc(tipScreenX, tipScreenY, 3, 0, TWO_PI); ctx.fill();
+    ctx.beginPath(); ctx.arc(penX, penY, 3, 0, TWO_PI); ctx.fill();
+  }
+
+  // ---- 애니메이션 루프 ----
+  let prevT = performance.now();
+  function loop(now) {
+    const dt = Math.min((now - prevT) / 1000, 0.05);
+    prevT = now;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (w > 0 && h > 0) {
+      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+        canvas.width = w * dpr; canvas.height = h * dpr;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (playing) t += speed * 1.05 * dt;
+      frame(w, h);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // ---- 입력 ----
+  nSlider.addEventListener('input', () => {
+    N = parseInt(nSlider.value);
+    nValEl.textContent = N;
+    trace = [];
+    selInfoEl.textContent = `${PRESET_NAME[preset]} · N = ${N}`;
+  });
+  speedSlider.addEventListener('input', () => {
+    speed = parseFloat(speedSlider.value);
+    speedValEl.textContent = speed.toFixed(1) + '×';
+  });
+  playBtn.addEventListener('click', () => {
+    playing = !playing;
+    playBtn.textContent = playing ? '일시정지' : '재생';
+  });
+  presetSeg.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    preset = b.dataset.preset;
+    [...presetSeg.children].forEach(c => c.classList.toggle('active', c === b));
+    trace = [];
+    selInfoEl.textContent = `${PRESET_NAME[preset]} · N = ${N}`;
+  });
+
+  selInfoEl.textContent = `${PRESET_NAME[preset]} · N = ${N}`;
+  speedValEl.textContent = speed.toFixed(1) + '×';
+  requestAnimationFrame(loop);
+})();
+</script>
+
+</body>
+</html>

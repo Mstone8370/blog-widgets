@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .fs-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .fs-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .fs-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+  }
+  .fs-vis .legend {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    font-size: 14.5px;
+    color: #666;
+    background: rgba(255, 255, 255, 0.78);
+    border: 1px solid #ececec;
+    border-radius: 4px;
+    padding: 5px 8px;
+    line-height: 1.55;
+    pointer-events: none;
+  }
+  .fs-vis .legend .target { color: #999; font-weight: 600; }
+  .fs-vis .legend .sum { color: #2052BB; font-weight: 600; }
+  .fs-vis .legend .harm { color: #d8334a; font-weight: 600; }
+
+  .fs-vis .controls {
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 96px 1fr 56px;
+    align-items: center;
+    gap: 10px 12px;
+    flex-shrink: 0;
+  }
+  .fs-vis .label { font-size: 16.5px; color: #444; }
+  .fs-vis .label i { color: #2052BB; }
+  .fs-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 16.5px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .fs-vis input[type=range] {
+    width: 100%;
+    accent-color: #2052BB;
+  }
+  .fs-vis .segment {
+    grid-column: 1 / -1;
+    display: flex;
+    border: 1px solid #d4d4d8;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .fs-vis .segment button {
+    flex: 1;
+    border: none;
+    border-right: 1px solid #e3e3e6;
+    background: #fff;
+    padding: 7px 4px;
+    font-family: 'SUIT', sans-serif;
+    font-size: 15.5px;
+    color: #555;
+    cursor: pointer;
+  }
+  .fs-vis .segment button:last-child { border-right: none; }
+  .fs-vis .segment button.active { background: #2052BB; color: #fff; }
+</style>
+</head>
+<body>
+
+<div class="fs-vis">
+  <div class="canvas-wrap">
+    <canvas id="fsCanvas"></canvas>
+    <div class="legend">
+      <span id="legendTop"><span class="target">목표 함수</span> · <span class="sum">부분합 S<sub>N</sub></span></span><br>
+      <span id="selInfo">사각파 · 누적 · N = 8</span>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="label">항 개수 <i>N</i></div>
+    <input type="range" id="nSlider" min="1" max="64" step="1" value="8">
+    <div class="value" id="nVal">8</div>
+
+    <div class="segment" id="presetSeg">
+      <button data-preset="square" class="active">사각파</button>
+      <button data-preset="sawtooth">톱니파</button>
+      <button data-preset="triangle">삼각파</button>
+    </div>
+    <div class="segment" id="modeSeg">
+      <button data-mode="cumulative" class="active">누적</button>
+      <button data-mode="harmonics">하모닉 개별</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+ * 푸리에 "급수"(주기 함수를 이산 하모닉 sin(n t)의 합으로 전개) 부분합 시각화.
+ * 푸리에 변환이 아니라 급수: 항은 n = 1, 2, 3 … 의 이산 정수 주파수.
+ *
+ * 세 프리셋 모두 홀함수(주기 2π)라 순수 사인 급수로 표현된다 (진폭 1 기준):
+ *   사각파  : f = (4/π)   Σ_{n 홀수}            sin(n t) / n
+ *   톱니파  : f = (2/π)   Σ_{n≥1} (-1)^{n+1}    sin(n t) / n
+ *   삼각파  : f = (8/π²)  Σ_{n 홀수} (-1)^{(n-1)/2} sin(n t) / n²
+ * 부분합 S_N(t) = Σ_{n=1}^N b_n sin(n t). 사각/삼각은 짝수 항 b_n = 0 (기여 없음).
+ *
+ * 두 토글:
+ *   [누적 | 하모닉 개별] : S_N 한 줄(+목표) / 각 항 b_n sin(n t) 를 따로
+ *   [사각 | 톱니 | 삼각] : 목표 함수 프리셋
+ * 누적에서 불연속점 부근 오버슈트 ≈ Gibbs 현상.
+ *
+ * 순수 Canvas 2D (2D 플롯이라 WebGL 불필요). 클래스 프리픽스 .fs-vis.
+ */
+(function() {
+  const PI = Math.PI;
+  const TWO_PI = 2 * PI;
+
+  const COL_TARGET = '#9a9a9a';
+  const COL_SUM    = '#2052BB';
+  const COL_AXIS   = '#555';
+  const COL_GRID   = '#ececec';
+
+  const canvas = document.getElementById('fsCanvas');
+  const ctx = canvas.getContext('2d');
+  const slider = document.getElementById('nSlider');
+  const nValEl = document.getElementById('nVal');
+  const selInfoEl = document.getElementById('selInfo');
+  const legendTopEl = document.getElementById('legendTop');
+  const presetSeg = document.getElementById('presetSeg');
+  const modeSeg = document.getElementById('modeSeg');
+
+  let N = parseInt(slider.value);
+  let preset = 'square';
+  let mode = 'cumulative';   // 'cumulative' | 'harmonics'
+
+  const PRESET_NAME = { square: '사각파', sawtooth: '톱니파', triangle: '삼각파' };
+
+  const Y_RANGE = 1.35;   // Gibbs 오버슈트(≈1.09)까지 담기게 약간 여유
+  const SAMPLES = 1024;   // t 샘플 수
+  const JUMP = 0.6;       // 불연속(수직 연결선) 끊는 임계값(데이터 단위)
+
+  // ---- n번째 하모닉 진폭 b_n (진폭 1 기준) ----
+  function bn(n) {
+    if (preset === 'square')   return (n % 2 === 1) ? 4 / (PI * n) : 0;
+    if (preset === 'sawtooth') return (2 / PI) * (n % 2 === 1 ? 1 : -1) / n;
+    // triangle: 홀수 항만, 부호 (-1)^{(n-1)/2}
+    if (n % 2 === 0) return 0;
+    const s = (((n - 1) / 2) % 2 === 0) ? 1 : -1;
+    return (8 / (PI * PI)) * s / (n * n);
+  }
+
+  // ---- 목표 함수 (닫힌 형태) ----
+  function target(t) {
+    if (preset === 'square')   return Math.sign(Math.sin(t));
+    if (preset === 'triangle') return (2 / PI) * Math.asin(Math.sin(t));
+    // sawtooth: (-π,π] 구간으로 접어 t/π
+    let tt = ((t + PI) % TWO_PI + TWO_PI) % TWO_PI - PI;
+    return tt / PI;
+  }
+
+  function partialSum(t) {
+    let s = 0;
+    for (let n = 1; n <= N; n++) s += bn(n) * Math.sin(n * t);
+    return s;
+  }
+
+  // ---- 플롯 영역 / 좌표 변환 ----
+  let plotX, plotY, plotW, plotH;
+  function setupPlot(w, h) {
+    const mL = 34, mR = 14, mT = 14, mB = 30;
+    plotX = mL; plotY = mT;
+    plotW = w - mL - mR;
+    plotH = h - mT - mB;
+  }
+  function sx(t) { return plotX + (t / TWO_PI) * plotW; }
+  function sy(v) { return plotY + (0.5 - v / (2 * Y_RANGE)) * plotH; }
+
+  function drawAxes() {
+    // 그리드 (세로: 0, π/2, π, 3π/2, 2π / 가로: -1, 0, 1)
+    ctx.strokeStyle = COL_GRID;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let k = 0; k <= 4; k++) {
+      const x = plotX + (k / 4) * plotW;
+      ctx.moveTo(x, plotY); ctx.lineTo(x, plotY + plotH);
+    }
+    for (const v of [-1, 1]) {
+      const y = sy(v);
+      ctx.moveTo(plotX, y); ctx.lineTo(plotX + plotW, y);
+    }
+    ctx.stroke();
+
+    // x축 (y=0)
+    ctx.strokeStyle = COL_AXIS;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(plotX, sy(0)); ctx.lineTo(plotX + plotW, sy(0));
+    ctx.stroke();
+
+    // 라벨
+    ctx.fillStyle = COL_AXIS;
+    ctx.font = '12px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const xl = ['0', 'π/2', 'π', '3π/2', '2π'];
+    for (let k = 0; k <= 4; k++) {
+      ctx.fillText(xl[k], plotX + (k / 4) * plotW, plotY + plotH + 6);
+    }
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (const v of [-1, 0, 1]) {
+      ctx.fillText(v.toFixed(0), plotX - 6, sy(v));
+    }
+  }
+
+  // 함수 곡선 그리기. breakOnJump=true 면 큰 점프(불연속)에서 선을 끊는다.
+  function drawCurve(fn, color, width, breakOnJump) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let prevV = null, started = false;
+    for (let i = 0; i <= SAMPLES; i++) {
+      const t = (i / SAMPLES) * TWO_PI;
+      const v = fn(t);
+      if (started && breakOnJump && Math.abs(v - prevV) > JUMP) {
+        ctx.stroke();
+        ctx.beginPath();
+        started = false;
+      }
+      const X = sx(t), Y = sy(Math.max(-Y_RANGE, Math.min(Y_RANGE, v)));
+      if (!started) { ctx.moveTo(X, Y); started = true; }
+      else ctx.lineTo(X, Y);
+      prevV = v;
+    }
+    ctx.stroke();
+  }
+
+  function harmonicColor(n, idx, count) {
+    // 저주파(파랑) → 고주파(빨강) 휴 램프
+    const tt = count <= 1 ? 0 : idx / (count - 1);
+    const hue = 210 - tt * 210;   // 210(파랑) → 0(빨강)
+    return `hsl(${hue}, 68%, 52%)`;
+  }
+
+  function draw() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    setupPlot(w, h);
+    drawAxes();
+
+    // 목표 함수 (점선, 옅게)
+    ctx.setLineDash([5, 4]);
+    drawCurve(target, COL_TARGET, 1.5, true);
+    ctx.setLineDash([]);
+
+    if (mode === 'cumulative') {
+      // 부분합 한 줄
+      drawCurve(partialSum, COL_SUM, 2.4, false);
+      legendTopEl.innerHTML = '<span class="target">목표 함수</span> · <span class="sum">부분합 S<sub>N</sub></span>';
+    } else {
+      // 각 하모닉 b_n sin(n t) 를 따로 (0 이 아닌 항만)
+      const active = [];
+      for (let n = 1; n <= N; n++) if (bn(n) !== 0) active.push(n);
+      active.forEach((n, idx) => {
+        const a = bn(n);
+        drawCurve((t) => a * Math.sin(n * t), harmonicColor(n, idx, active.length), 1.6, false);
+      });
+      legendTopEl.innerHTML = '<span class="target">목표 함수</span> · <span class="harm">각 하모닉 b<sub>n</sub>sin(n t)</span>';
+    }
+
+    selInfoEl.textContent =
+      `${PRESET_NAME[preset]} · ${mode === 'cumulative' ? '누적' : '하모닉 개별'} · N = ${N}`;
+  }
+
+  // ---- 입력 ----
+  slider.addEventListener('input', () => {
+    N = parseInt(slider.value);
+    nValEl.textContent = N;
+    draw();
+  });
+  presetSeg.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    preset = b.dataset.preset;
+    [...presetSeg.children].forEach(c => c.classList.toggle('active', c === b));
+    draw();
+  });
+  modeSeg.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    mode = b.dataset.mode;
+    [...modeSeg.children].forEach(c => c.classList.toggle('active', c === b));
+    draw();
+  });
+
+  window.addEventListener('resize', draw);
+  if (window.ResizeObserver) new ResizeObserver(draw).observe(canvas);
+  draw();
+})();
+</script>
+
+</body>
+</html>

@@ -22,6 +22,11 @@
 - [SH 밴드별 주파수](https://mstone8370.github.io/blog-widgets/Graphics/SH/SH_Bands_Visualizer.html)
 - [SH 밴드 분해 · 누적 (단일 구)](https://mstone8370.github.io/blog-widgets/Graphics/SH/SH_Reconstruction_Visualizer.html)
 
+### 푸리에 급수
+- [푸리에 급수 (부분합 누적)](https://mstone8370.github.io/blog-widgets/Graphics/Fourier/Fourier_Series_Visualizer.html)
+- [푸리에 급수 (에피사이클)](https://mstone8370.github.io/blog-widgets/Graphics/Fourier/Fourier_Series_Epicycle_Visualizer.html)
+- [푸리에 기저 직교성](https://mstone8370.github.io/blog-widgets/Graphics/Fourier/Fourier_Orthogonality_Visualizer.html)
+
 ### Specular IBL · 샘플링
 - [Monte Carlo](https://mstone8370.github.io/blog-widgets/Graphics/IBL/SpecularIBL/Monte_Carlo_Visualizer.html)
 - [Monte Carlo (Hammersley)](https://mstone8370.github.io/blog-widgets/Graphics/IBL/SpecularIBL/Monte_Carlo_Hammersley_Visualizer.html)

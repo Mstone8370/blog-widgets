@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .fso-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .fso-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .fso-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+  }
+  .fso-vis .legend {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    font-size: 14.5px;
+    color: #666;
+    background: rgba(255, 255, 255, 0.82);
+    border: 1px solid #ececec;
+    border-radius: 4px;
+    padding: 5px 8px;
+    line-height: 1.6;
+    pointer-events: none;
+  }
+  .fso-vis .legend .cm { color: #2052BB; font-weight: 600; }
+  .fso-vis .legend .cn { color: #d8334a; font-weight: 600; }
+  .fso-vis .legend .pos { color: #2a9d4a; font-weight: 600; }
+  .fso-vis .legend .neg { color: #d8334a; font-weight: 600; }
+  .fso-vis .legend .ortho { color: #2a9d4a; font-weight: 700; }
+  .fso-vis .legend .norm { color: #c46a10; font-weight: 700; }
+  .fso-vis .legend .ival { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+
+  .fso-vis .controls {
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 56px 1fr 44px;
+    align-items: center;
+    gap: 10px 12px;
+    flex-shrink: 0;
+  }
+  .fso-vis .label { font-size: 16.5px; color: #444; }
+  .fso-vis .label .cm { color: #2052BB; font-weight: 700; }
+  .fso-vis .label .cn { color: #d8334a; font-weight: 700; }
+  .fso-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 16.5px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .fso-vis input[type=range] {
+    width: 100%;
+    accent-color: #2052BB;
+  }
+</style>
+</head>
+<body>
+
+<div class="fso-vis">
+  <div class="canvas-wrap">
+    <canvas id="fsoCanvas"></canvas>
+    <div class="legend">
+      <span class="cm">sin(m t)</span> · <span class="cn">sin(n t)</span><br>
+      <span id="statusInfo">m ≠ n</span><br>
+      <span class="ival"><span class="pos">S₊</span>=<span id="posVal">0.00</span> · <span class="neg">S₋</span>=<span id="negVal">0.00</span></span>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="label"><span class="cm">m</span></div>
+    <input type="range" id="mSlider" min="1" max="8" step="1" value="2">
+    <div class="value" id="mVal">2</div>
+    <div class="label"><span class="cn">n</span></div>
+    <input type="range" id="nSlider" min="1" max="8" step="1" value="3">
+    <div class="value" id="nVal">3</div>
+  </div>
+</div>
+
+<script>
+/*
+ * 푸리에 "급수" 기저의 직교성 시각화 (정적).
+ * 두 사인 기저 sin(m t), sin(n t) 를 곱한 뒤 한 주기 [0,2π] 에 대해 적분하면:
+ *   ∫₀^{2π} sin(m t) sin(n t) dt = 0 (m≠n, 직교) / π (m=n, 노름²)
+ * 곱 sin(m t)·sin(n t) 의 부호 넓이(양수=초록 S₊, 음수=빨강 S₋)를 통째로 칠한다.
+ * m≠n 이면 S₊ ≈ S₋ 라 상쇄되어 적분 0(직교), m=n 이면 곱=sin²≥0 라 S₋=0, 적분 π.
+ *
+ * 위: 두 기저 곡선 / 아래: 곱과 부호 넓이. 순수 Canvas 2D. 클래스 .fso-vis.
+ */
+(function() {
+  const PI = Math.PI;
+  const TWO_PI = 2 * PI;
+
+  const COL_M = '#2052BB';
+  const COL_N = '#d8334a';
+  const COL_PROD = '#333';
+  const COL_POS = 'rgba(42,157,74,0.40)';   // 양수 넓이 초록
+  const COL_NEG = 'rgba(216,51,74,0.34)';   // 음수 넓이 빨강
+  const COL_AXIS = '#888';
+  const COL_GRID = '#ececec';
+
+  const canvas = document.getElementById('fsoCanvas');
+  const ctx = canvas.getContext('2d');
+  const mSlider = document.getElementById('mSlider');
+  const nSlider = document.getElementById('nSlider');
+  const mValEl = document.getElementById('mVal');
+  const nValEl = document.getElementById('nVal');
+  const statusEl = document.getElementById('statusInfo');
+  const posValEl = document.getElementById('posVal');
+  const negValEl = document.getElementById('negVal');
+
+  let m = parseInt(mSlider.value);
+  let n = parseInt(nSlider.value);
+
+  const NUM = 720;   // 곱 적분 샘플 수
+  const R = 1.12;    // y 범위
+
+  // ---- 레이아웃 ----
+  let plotX, plotW, topMid, topHalf, botMid, botHalf;
+  function layout(w, h) {
+    const mT = 12, mB = 26, mL = 36, mR = 14, gap = 20;
+    plotX = mL;
+    plotW = w - mL - mR;
+    const usable = h - mT - mB - gap;
+    const topH = usable * 0.40;
+    const botH = usable * 0.60;
+    topMid = mT + topH / 2;
+    topHalf = topH / 2;
+    botMid = mT + topH + gap + botH / 2;
+    botHalf = botH / 2;
+  }
+  function sx(t) { return plotX + (t / TWO_PI) * plotW; }
+  function syBot(v) { return botMid - (v / R) * botHalf; }
+
+  function panelAxes(mid, half, ticks) {
+    ctx.strokeStyle = COL_GRID;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const v of [-1, 1]) {
+      const y = mid - (v / R) * half;
+      ctx.moveTo(plotX, y); ctx.lineTo(plotX + plotW, y);
+    }
+    for (let k = 0; k <= 4; k++) {
+      const x = plotX + (k / 4) * plotW;
+      ctx.moveTo(x, mid - half); ctx.lineTo(x, mid + half);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = COL_AXIS;
+    ctx.beginPath();
+    ctx.moveTo(plotX, mid); ctx.lineTo(plotX + plotW, mid);
+    ctx.stroke();
+    if (ticks) {
+      ctx.fillStyle = COL_AXIS;
+      ctx.font = '11px JetBrains Mono, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const xl = ['0', 'π/2', 'π', '3π/2', '2π'];
+      for (let k = 0; k <= 4; k++) ctx.fillText(xl[k], plotX + (k / 4) * plotW, mid + half + 5);
+    }
+  }
+
+  function curve(fn, mid, half, color, width) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    const STEP = 360;
+    for (let i = 0; i <= STEP; i++) {
+      const t = (i / STEP) * TWO_PI;
+      const X = sx(t), Y = mid - (Math.max(-R, Math.min(R, fn(t))) / R) * half;
+      if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    }
+    ctx.stroke();
+  }
+
+  function panelLabel(text, mid, half, color) {
+    ctx.fillStyle = color;
+    ctx.font = '12px SUIT, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(text, plotX + 4, mid - half + 3);
+  }
+
+  function draw() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    layout(w, h);
+
+    // 위 패널: 두 기저
+    panelAxes(topMid, topHalf, false);
+    curve((t) => Math.sin(m * t), topMid, topHalf, COL_M, 1.8);
+    curve((t) => Math.sin(n * t), topMid, topHalf, COL_N, 1.8);
+
+    // 아래 패널: 곱 + 부호 넓이 (전체)
+    panelAxes(botMid, botHalf, true);
+    const y0 = syBot(0);
+    const dt = TWO_PI / NUM;
+    let posA = 0, negA = 0;
+    for (let i = 0; i < NUM; i++) {
+      const tA = i * dt, tB = (i + 1) * dt;
+      const vA = Math.sin(m * tA) * Math.sin(n * tA);
+      const vB = Math.sin(m * tB) * Math.sin(n * tB);
+      const area = 0.5 * (vA + vB) * dt;
+      if (area >= 0) posA += area; else negA += -area;
+      ctx.fillStyle = (vA + vB) >= 0 ? COL_POS : COL_NEG;
+      ctx.beginPath();
+      ctx.moveTo(sx(tA), y0);
+      ctx.lineTo(sx(tA), syBot(vA));
+      ctx.lineTo(sx(tB), syBot(vB));
+      ctx.lineTo(sx(tB), y0);
+      ctx.closePath();
+      ctx.fill();
+    }
+    curve((t) => Math.sin(m * t) * Math.sin(n * t), botMid, botHalf, COL_PROD, 1.4);
+
+    panelLabel('sin(m t), sin(n t)', topMid, topHalf, '#888');
+    panelLabel('곱  sin(m t)·sin(n t)', botMid, botHalf, '#888');
+
+    posValEl.textContent = posA.toFixed(2);
+    negValEl.textContent = negA.toFixed(2);
+  }
+
+  function updateStatus() {
+    if (m === n) {
+      statusEl.innerHTML = 'm = n → <span class="norm">∫ = π ≈ 3.142</span> (노름²)';
+    } else {
+      statusEl.innerHTML = 'm ≠ n → <span class="ortho">∫ = 0 (직교)</span>';
+    }
+  }
+
+  mSlider.addEventListener('input', () => {
+    m = parseInt(mSlider.value); mValEl.textContent = m; updateStatus(); draw();
+  });
+  nSlider.addEventListener('input', () => {
+    n = parseInt(nSlider.value); nValEl.textContent = n; updateStatus(); draw();
+  });
+
+  window.addEventListener('resize', draw);
+  if (window.ResizeObserver) new ResizeObserver(draw).observe(canvas);
+  updateStatus();
+  draw();
+})();
+</script>
+
+</body>
+</html>
