@@ -224,26 +224,51 @@
     curve((t) => Math.sin(n * t), topMid, topHalf, COL_N, 1.8);
 
     // 아래 패널: 곱 + 부호 넓이 (전체)
+    // 부호가 같은 구간(lobe)마다 단일 폴리곤으로 한 번에 채운다.
+    // 스트립을 나란히 칠하면 반투명 경계가 겹쳐 일부 라인만 진해지는 아티팩트가 생김.
     panelAxes(botMid, botHalf, true);
     const y0 = syBot(0);
     const dt = TWO_PI / NUM;
+    const prod = (t) => Math.sin(m * t) * Math.sin(n * t);
+
     let posA = 0, negA = 0;
-    for (let i = 0; i < NUM; i++) {
-      const tA = i * dt, tB = (i + 1) * dt;
-      const vA = Math.sin(m * tA) * Math.sin(n * tA);
-      const vB = Math.sin(m * tB) * Math.sin(n * tB);
-      const area = 0.5 * (vA + vB) * dt;
-      if (area >= 0) posA += area; else negA += -area;
-      ctx.fillStyle = (vA + vB) >= 0 ? COL_POS : COL_NEG;
+    let run = [{ x: sx(0), y: syBot(prod(0)) }];   // 현재 부호 구간의 곡선 점들
+    let runSign = prod(0) >= 0 ? 1 : -1;
+    let prevT = 0, prevV = prod(0);
+
+    function flushRun(sign) {
+      if (run.length < 2) return;
+      ctx.fillStyle = sign >= 0 ? COL_POS : COL_NEG;
       ctx.beginPath();
-      ctx.moveTo(sx(tA), y0);
-      ctx.lineTo(sx(tA), syBot(vA));
-      ctx.lineTo(sx(tB), syBot(vB));
-      ctx.lineTo(sx(tB), y0);
+      ctx.moveTo(run[0].x, y0);
+      for (const p of run) ctx.lineTo(p.x, p.y);
+      ctx.lineTo(run[run.length - 1].x, y0);
       ctx.closePath();
       ctx.fill();
     }
-    curve((t) => Math.sin(m * t) * Math.sin(n * t), botMid, botHalf, COL_PROD, 1.4);
+
+    for (let i = 1; i <= NUM; i++) {
+      const t = i * dt;
+      const v = prod(t);
+      const a = 0.5 * (prevV + v) * dt;
+      if (a >= 0) posA += a; else negA += -a;
+
+      const sign = v >= 0 ? 1 : -1;
+      if (sign !== runSign && prevV !== 0 && v !== 0) {
+        // 영점 교차점에서 끊는다 (선형 보간)
+        const frac = prevV / (prevV - v);
+        const xc = sx(prevT + frac * dt);
+        run.push({ x: xc, y: y0 });
+        flushRun(runSign);
+        run = [{ x: xc, y: y0 }];
+        runSign = sign;
+      }
+      run.push({ x: sx(t), y: syBot(v) });
+      prevV = v; prevT = t;
+    }
+    flushRun(runSign);
+
+    curve(prod, botMid, botHalf, COL_PROD, 1.4);
 
     panelLabel('sin(m t), sin(n t)', topMid, topHalf, '#888');
     panelLabel('곱  sin(m t)·sin(n t)', botMid, botHalf, '#888');
