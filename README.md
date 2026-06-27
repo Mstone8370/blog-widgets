@@ -38,6 +38,11 @@
 - [Full IBL](https://mstone8370.github.io/blog-widgets/Graphics/IBL/Full_IBL_Visualizer.html)
 - [Helmet IBL (FBX 모델)](https://mstone8370.github.io/blog-widgets/Graphics/IBL/Helmet_IBL_Visualizer.html)
 
+### 실험 · 스케치
+> 정식 글에 임베드하지 않은 개인용 스케치
+- [하프벡터 기하 (H = L+V)](https://mstone8370.github.io/blog-widgets/Graphics/PBR/Half_Vector_Visualizer.html)
+- [렌더링 방정식 반구 적분](https://mstone8370.github.io/blog-widgets/Graphics/PBR/Rendering_Equation_Visualizer.html)
+
 ## 사용 방법
  
 각 위젯은 독립적인 HTML 파일이며, GitHub Pages로 호스팅되어 `iframe`을 통해 블로그에 임베드됨

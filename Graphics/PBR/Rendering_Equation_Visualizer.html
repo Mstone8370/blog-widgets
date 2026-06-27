@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .re-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .re-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .re-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    touch-action: none;
+    cursor: grab;
+  }
+  .re-vis canvas.dragging { cursor: grabbing; }
+
+  .re-vis .legend {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    font-size: 14px;
+    color: #666;
+    background: rgba(255, 255, 255, 0.82);
+    border: 1px solid #ececec;
+    border-radius: 4px;
+    padding: 5px 8px;
+    line-height: 1.6;
+    pointer-events: none;
+  }
+  .re-vis .legend .li { color: #d98a16; font-weight: 700; }
+  .re-vis .legend .co { color: #888; font-weight: 700; }
+  .re-vis .legend .fr { color: #2a9d4a; font-weight: 700; }
+  .re-vis .legend .pr { color: #2052BB; font-weight: 700; }
+  .re-vis .legend .ival { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+
+  .re-vis .hint {
+    position: absolute;
+    bottom: 6px;
+    right: 8px;
+    font-size: 12px;
+    color: #aaa;
+    background: rgba(255, 255, 255, 0.7);
+    padding: 2px 6px;
+    border-radius: 4px;
+    pointer-events: none;
+  }
+
+  .re-vis .controls {
+    padding: 4px;
+    display: grid;
+    grid-template-columns: 92px 1fr 54px;
+    align-items: center;
+    gap: 9px 12px;
+    flex-shrink: 0;
+  }
+  .re-vis .label { font-size: 16px; color: #444; }
+  .re-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 16px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .re-vis input[type=range] {
+    width: 100%;
+    accent-color: #2052BB;
+  }
+  .re-vis .seg {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 6px;
+  }
+  .re-vis .seg button {
+    flex: 1;
+    font-family: 'SUIT', sans-serif;
+    font-size: 15px;
+    padding: 5px 0;
+    border: 1px solid #ccc;
+    background: #f4f4f4;
+    color: #555;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .re-vis .seg button.active {
+    background: #2052BB;
+    color: #fff;
+    border-color: #2052BB;
+  }
+</style>
+</head>
+<body>
+
+<div class="re-vis">
+  <div class="canvas-wrap">
+    <canvas id="reCanvas"></canvas>
+    <div class="legend">
+      L<sub>o</sub> = ∫<sub>Ω</sub> <span class="fr">f</span>·<span class="li">L<sub>i</sub></span>·<span class="co">cosθ</span> dl<br>
+      <span class="ival">L<sub>o</sub> ≈ <span class="pr" id="loVal">0.00</span></span>
+    </div>
+    <div class="hint">시선 V 화살표를 드래그</div>
+  </div>
+  <div class="controls">
+    <div class="label">거칠기 α</div>
+    <input type="range" id="aSlider" min="5" max="100" step="1" value="30">
+    <div class="value" id="aVal">0.30</div>
+    <div class="label">샘플 수</div>
+    <input type="range" id="nSlider" min="5" max="60" step="1" value="17">
+    <div class="value" id="nVal">17</div>
+    <div class="seg">
+      <button data-mode="diff">확산</button>
+      <button data-mode="spec">반사</button>
+      <button data-mode="both" class="active">모두</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+ * 렌더링 방정식 반구 적분 시각화 (2D 단면).
+ *   Lo(v) = ∫_Ω f(l,v) · Li(l) · (n·l) dl
+ * "모든 입사 방향마다 (환경광 Li × BRDF f × 코사인) 을 곱해 전부 더한다" 를 보여준다.
+ *
+ * 위 패널: 반구 + 환경광(rim, 해 분포) + 시선 V(드래그) + BRDF 로브 + 입사 샘플 막대.
+ * 아래 패널: 각도 θ 축 위에 Li / cosθ / f / 곱(적분=면적) 분해. 곱의 면적이 Lo.
+ * 거칠기·샘플수 슬라이더, 확산/반사/모두 토글. 순수 Canvas 2D. 클래스 .re-vis.
+ */
+(function () {
+  const PI = Math.PI;
+  const TWO_PI = 2 * PI;
+  const DEG = 180 / PI;
+  const HALF = PI / 2;
+
+  const COL_ARC = '#dcdcdc';
+  const COL_SURF = '#888';
+  const COL_V = '#2052BB';
+  const COL_LOBE_F = 'rgba(42,157,74,0.16)';
+  const COL_LOBE_S = 'rgba(42,157,74,0.6)';
+  const COL_LI = '#d98a16';
+  const COL_CO = '#9a9a9a';
+  const COL_FR = '#2a9d4a';
+  const COL_PR = '#2052BB';
+  const COL_PR_F = 'rgba(32,82,187,0.18)';
+  const COL_GRID = '#ececec';
+
+  const canvas = document.getElementById('reCanvas');
+  const ctx = canvas.getContext('2d');
+  const aSlider = document.getElementById('aSlider');
+  const nSlider = document.getElementById('nSlider');
+  const aValEl = document.getElementById('aVal');
+  const nValEl = document.getElementById('nVal');
+  const loValEl = document.getElementById('loVal');
+  const segBtns = document.querySelectorAll('.seg button');
+
+  let alpha = 0.30;
+  let nSamples = 17;
+  let mode = 'both';
+  let thetaV = 34 / DEG;     // 시선(법선 기준, +면 오른쪽)
+
+  // 환경광: 약한 주변광 + 해 한 덩어리
+  const SUN_T = -40 / DEG;
+  const SUN_SIG = 12 / DEG;
+  const AMBIENT = 0.13;
+  function Li(theta) {
+    const d = (theta - SUN_T) / SUN_SIG;
+    return AMBIENT + Math.exp(-d * d);
+  }
+
+  // GGX 정규화 로브(피크=1)
+  function normGGX(theta) {
+    const a2 = alpha * alpha;
+    const c = Math.cos(theta);
+    const k = c * c * (a2 - 1) + 1;
+    return (a2 * a2) / (k * k);
+  }
+
+  const DIFF = 0.30;       // 람베르트 상수항 (상대)
+  const SPEC = 1.0;        // 반사 가중
+  // BRDF: 입사각 θ, 시선 thetaV. 반사 피크는 H=N → θ = -thetaV.
+  function brdf(theta) {
+    let f = 0;
+    if (mode === 'diff' || mode === 'both') f += DIFF;
+    if (mode === 'spec' || mode === 'both') {
+      const thetaH = (theta + thetaV) / 2;   // 입사·시선의 각이등분
+      f += SPEC * normGGX(thetaH);
+    }
+    return f;
+  }
+  function cosTerm(theta) { return Math.max(0, Math.cos(theta)); }
+  function integrand(theta) { return Li(theta) * brdf(theta) * cosTerm(theta); }
+
+  // 적분값(미세 격자) + 곱 최대값(스케일용)
+  function integrate() {
+    const M = 720;
+    let sum = 0, peak = 1e-6;
+    for (let i = 0; i <= M; i++) {
+      const th = -HALF + (i / M) * PI;
+      const v = integrand(th);
+      if (v > peak) peak = v;
+      const wq = (i === 0 || i === M) ? 0.5 : 1;
+      sum += wq * v;
+    }
+    sum *= (PI / M);
+    return { Lo: sum, peak: peak };
+  }
+
+  let cx = 0, cyTop = 0, RAD = 0;
+  let bx = 0, by = 0, bw = 0, bh = 0;   // 아래 패널 박스
+
+  function dirPoint(theta, r) {
+    return { x: cx + r * Math.sin(theta), y: cyTop - r * Math.cos(theta) };
+  }
+  // 환경 밝기 → 따뜻한 색
+  function envColor(b) {
+    const t = Math.max(0, Math.min(1, b));
+    const r = Math.round(60 + t * 195);
+    const g = Math.round(58 + t * 172);
+    const bl = Math.round(70 + t * 95);
+    return `rgb(${r},${g},${bl})`;
+  }
+
+  function arrowHead(x0, y0, x1, y1, color, size) {
+    const ang = Math.atan2(y1 - y0, x1 - x0);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - size * Math.cos(ang - 0.4), y1 - size * Math.sin(ang - 0.4));
+    ctx.lineTo(x1 - size * Math.cos(ang + 0.4), y1 - size * Math.sin(ang + 0.4));
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function draw() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const topH = h * 0.60;
+    const botH = h * 0.40;
+    cx = w * 0.5;
+    cyTop = topH * 0.92;
+    RAD = Math.min(w * 0.43, topH * 0.80);
+
+    const { Lo, peak } = integrate();
+
+    // ===== 위 패널 =====
+    // 환경광 rim
+    const ER = RAD * 1.02;
+    const SEG = 140;
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'butt';
+    for (let i = 0; i < SEG; i++) {
+      const th0 = -HALF + (i / SEG) * PI;
+      const th1 = -HALF + ((i + 1) / SEG) * PI;
+      const p0 = dirPoint(th0, ER);
+      const p1 = dirPoint(th1, ER);
+      ctx.strokeStyle = envColor(Li((th0 + th1) / 2) / (1 + AMBIENT));
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.stroke();
+    }
+
+    // 반구 호 + 표면
+    ctx.strokeStyle = COL_ARC;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(cx, cyTop, RAD, PI, TWO_PI);
+    ctx.stroke();
+    ctx.strokeStyle = COL_SURF;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(cx - RAD * 1.12, cyTop);
+    ctx.lineTo(cx + RAD * 1.12, cyTop);
+    ctx.stroke();
+    // 법선
+    ctx.strokeStyle = '#cfcfcf';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath();
+    ctx.moveTo(cx, cyTop);
+    ctx.lineTo(cx, cyTop - RAD);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // BRDF 로브 f(l,v)
+    ctx.beginPath();
+    ctx.moveTo(cx, cyTop);
+    const LB = RAD * 0.82;
+    let fmax = 1e-6;
+    for (let i = -90; i <= 90; i++) { const v = brdf(i / DEG); if (v > fmax) fmax = v; }
+    for (let i = 0; i <= 120; i++) {
+      const th = -HALF + (i / 120) * PI;
+      const p = dirPoint(th, LB * brdf(th) / fmax);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = COL_LOBE_F;
+    ctx.fill();
+    ctx.strokeStyle = COL_LOBE_S;
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+
+    // 입사 샘플 막대 (기여 = integrand)
+    for (let s = 0; s < nSamples; s++) {
+      const th = -HALF + (s + 0.5) / nSamples * PI;
+      const contrib = integrand(th) / peak;
+      const len = RAD * (0.12 + 0.72 * contrib);
+      const p = dirPoint(th, len);
+      const a = 0.25 + 0.65 * contrib;
+      ctx.strokeStyle = `rgba(217,138,22,${a})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(cx, cyTop);
+      ctx.stroke();
+      arrowHead(p.x, p.y, cx + (p.x - cx) * 0.001, cyTop + (p.y - cyTop) * 0.001, `rgba(217,138,22,${a})`, 7);
+    }
+
+    // 시선 V (드래그) + 출사 Lo
+    const vEnd = dirPoint(thetaV, RAD * 0.98);
+    ctx.strokeStyle = COL_V;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx, cyTop);
+    ctx.lineTo(vEnd.x, vEnd.y);
+    ctx.stroke();
+    arrowHead(cx, cyTop, vEnd.x, vEnd.y, COL_V, 12);
+    // V 핸들
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = COL_V;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(vEnd.x, vEnd.y, 6.5, 0, TWO_PI);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = COL_V;
+    ctx.font = '600 15px SUIT, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const vl = dirPoint(thetaV, RAD * 0.98 + 16);
+    ctx.fillText('V', vl.x, vl.y);
+
+    // ===== 아래 패널: 분해 곡선 =====
+    bx = w * 0.09;
+    bw = w * 0.86;
+    by = topH + botH * 0.16;
+    bh = botH * 0.66;
+    const x0 = bx, x1 = bx + bw, ymid = by + bh, ytop = by;
+
+    // 격자 + 축
+    ctx.strokeStyle = COL_GRID;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let k = 0; k <= 4; k++) {
+      const xx = x0 + (k / 4) * bw;
+      ctx.moveTo(xx, ytop); ctx.lineTo(xx, ymid);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = COL_SURF;
+    ctx.beginPath();
+    ctx.moveTo(x0, ymid); ctx.lineTo(x1, ymid);
+    ctx.stroke();
+    ctx.fillStyle = COL_SURF;
+    ctx.font = '11px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const xl = ['-90°', '-45°', '0°', '45°', '90°'];
+    for (let k = 0; k <= 4; k++) ctx.fillText(xl[k], x0 + (k / 4) * bw, ymid + 4);
+
+    const tx = (theta) => x0 + ((theta + HALF) / PI) * bw;
+    function plot(fn, scale, color, width) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      const N = 240;
+      for (let i = 0; i <= N; i++) {
+        const th = -HALF + (i / N) * PI;
+        const yy = ymid - Math.min(1, fn(th) * scale) * bh;
+        const xx = tx(th);
+        if (i === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+      }
+      ctx.stroke();
+    }
+
+    // 곱(적분) 면적
+    ctx.beginPath();
+    ctx.moveTo(x0, ymid);
+    const N2 = 240;
+    for (let i = 0; i <= N2; i++) {
+      const th = -HALF + (i / N2) * PI;
+      const yy = ymid - Math.min(1, integrand(th) / peak) * bh;
+      ctx.lineTo(tx(th), yy);
+    }
+    ctx.lineTo(x1, ymid);
+    ctx.closePath();
+    ctx.fillStyle = COL_PR_F;
+    ctx.fill();
+
+    // 구성 곡선 (정규화해 한 패널에)
+    plot(Li, 1 / (1 + AMBIENT), COL_LI, 1.3);
+    plot(cosTerm, 1, COL_CO, 1.3);
+    plot(brdf, 1 / fmax, COL_FR, 1.3);
+    plot(integrand, 1 / peak, COL_PR, 2);
+
+    // 작은 범례
+    ctx.font = '12px SUIT, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const items = [['Li', COL_LI], ['cosθ', COL_CO], ['f', COL_FR], ['곱', COL_PR]];
+    let lx = x0 + 2;
+    for (const [t, c] of items) {
+      ctx.strokeStyle = c; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(lx, ytop + 8); ctx.lineTo(lx + 16, ytop + 8); ctx.stroke();
+      ctx.fillStyle = c;
+      ctx.fillText(t, lx + 20, ytop + 8);
+      lx += 20 + ctx.measureText(t).width + 16;
+    }
+
+    loValEl.textContent = Lo.toFixed(2);
+  }
+
+  // --- 드래그 (시선 V) ---
+  let dragging = false;
+  function pointerTheta(ev) {
+    const rect = canvas.getBoundingClientRect();
+    const px = ev.clientX - rect.left;
+    const py = ev.clientY - rect.top;
+    let th = Math.atan2(px - cx, cyTop - py);
+    const lim = 89 / DEG;
+    return Math.max(-lim, Math.min(lim, th));
+  }
+  canvas.addEventListener('pointerdown', (ev) => {
+    dragging = true;
+    canvas.classList.add('dragging');
+    canvas.setPointerCapture(ev.pointerId);
+    thetaV = pointerTheta(ev);
+    draw();
+  });
+  canvas.addEventListener('pointermove', (ev) => {
+    if (!dragging) return;
+    thetaV = pointerTheta(ev);
+    draw();
+  });
+  function endDrag() { dragging = false; canvas.classList.remove('dragging'); }
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+
+  aSlider.addEventListener('input', () => {
+    alpha = +aSlider.value / 100;
+    aValEl.textContent = alpha.toFixed(2);
+    draw();
+  });
+  nSlider.addEventListener('input', () => {
+    nSamples = +nSlider.value;
+    nValEl.textContent = nSamples;
+    draw();
+  });
+  segBtns.forEach((b) => b.addEventListener('click', () => {
+    segBtns.forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    mode = b.dataset.mode;
+    draw();
+  }));
+
+  window.addEventListener('resize', draw);
+  if (window.ResizeObserver) new ResizeObserver(draw).observe(canvas);
+  aValEl.textContent = alpha.toFixed(2);
+  nValEl.textContent = nSamples;
+  draw();
+})();
+</script>
+
+</body>
+</html>
