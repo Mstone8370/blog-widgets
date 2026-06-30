@@ -143,6 +143,7 @@ const CAM_DIST = 4.2;          // 기본 카메라 거리
 const CAM_DIST_MIN = 2.0, CAM_DIST_MAX = 5.0;   // 휠/핀치 줌 범위(작게)
 const TARGET_R = 1.15;        // 모델 fit 반지름
 const MODEL_UP_FIX = PI / 2;  // FBX Y-up → 씬 Z-up (X축 +90°)
+const YAW_OFFSET = PI / 2;    // 모델 기본 yaw 오프셋 +90° (슬라이더와 무관)
 const GRID_C   = 0xe3e3e6;
 const GRID_MID = 0xd0d0d4;
 const AXIS_C   = 0x8a93a6;
@@ -381,7 +382,7 @@ function applyPitch() {
 }
 function applyYaw() {
   const deg = +yawSlider.value;
-  yawGroup.rotation.z = deg * PI / 180;
+  yawGroup.rotation.z = deg * PI / 180 + YAW_OFFSET;
   yawVal.textContent = deg + '°';
 }
 pitchSlider.addEventListener('input', () => { applyPitch(); render(); });
