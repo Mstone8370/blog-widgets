@@ -96,7 +96,9 @@ const hcCheck = document.getElementById('hcCheck');
 rSlider.addEventListener('input', () => {
   const roughness = +rSlider.value / 100;
   rValEl.textContent = roughness.toFixed(2);
-  w.sphereMat.uniforms.uRough.value = roughness;
+  // 원본은 조명에 넘기기 전에 roughness 를 클램프한다
+  // (CommonMeshPixelShader.hlsl: RoughnessClamped = max(Roughness, 0.015))
+  w.sphereMat.uniforms.uRough.value = Math.max(roughness, 0.015);
   w.requestDraw();
 });
 lSlider.addEventListener('input', () => {

@@ -138,6 +138,7 @@ import { SH_DIFFUSE_COEFFS } from './DiffuseIBL/sh_coeffs.js';
 const PI = Math.PI;
 const GAMMA = 2.2;
 const MAX_LOD = 9.0;          // prefiltered 밉 레벨 9 (= roughness 1.0)
+const MIN_ROUGHNESS = 0.015;  // 원본 CommonMeshPixelShader.hlsl: max(Roughness, 0.015)
 const BASE_FOV = 40 * PI / 180;
 const CAM_DIST = 4.2;          // 기본 카메라 거리
 const CAM_DIST_MIN = 2.0, CAM_DIST_MAX = 5.0;   // 휠/핀치 줌 범위(작게)
@@ -321,7 +322,9 @@ const helmetMat = new THREE.ShaderMaterial({
     void main() {
       vec3 baseColor = pow(texture2D(uBaseColor, vUv).rgb, vec3(${GAMMA.toFixed(1)}));  // sRGB→선형
       float metallic = texture2D(uMetallic, vUv).r;
-      float rough = texture2D(uRoughness, vUv).r;
+      // 원본은 조명에 넘기기 전에 roughness 를 클램프한다
+      // (CommonMeshPixelShader.hlsl: RoughnessClamped = max(Roughness, 0.015))
+      float rough = max(texture2D(uRoughness, vUv).r, ${MIN_ROUGHNESS});
       vec3 emissive = pow(texture2D(uEmissive, vUv).rgb, vec3(${GAMMA.toFixed(1)}));
 
       // 노멀맵 (DirectX → OpenGL: G 반전)

@@ -140,6 +140,7 @@ import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 const PI = Math.PI;
 const GAMMA = 2.2;            // HDR 선형값 → 표시(감마공간) 인코딩
 const MAX_LOD = 9.0;          // EnvPrefilterMaxLod(10) - 1
+const MIN_ROUGHNESS = 0.015;  // 원본 CommonMeshPixelShader.hlsl: max(Roughness, 0.015)
 const BASE_FOV = 40 * PI / 180;
 const CAM_DIST = 4.2;
 const GRID_C   = 0xe3e3e6;
@@ -279,12 +280,15 @@ const sphereMat = new THREE.ShaderMaterial({
       float NoV = max(dot(N, V), 0.0);
 
       // prefiltered 밉 큐브 LOD 샘플 (roughness → mip)
-      float lod = clamp(uRough, 0.0, 1.0) * ${MAX_LOD.toFixed(1)};
+      // 원본은 조명에 넘기기 전에 roughness 를 클램프한다
+      // (CommonMeshPixelShader.hlsl: RoughnessClamped = max(Roughness, 0.015))
+      float rough = max(uRough, ${MIN_ROUGHNESS});
+      float lod = clamp(rough, 0.0, 1.0) * ${MAX_LOD.toFixed(1)};
       vec3 prefilteredColor = textureCubeLodEXT(uPrefiltered, cubeDir(R), lod).rgb;
       // LUT 의 V 축은 뒤집혀 있다: three 의 EXRLoader 가 파일 행을 역순으로 쓰고
       // (texture.flipY = false) 되돌리지 않아, GL 의 v = 1 - roughness 가 된다.
       // (원본 리소스는 DirectX 기준, 여기선 오른손 좌표계/GL 텍스처 규약)
-      vec2 envBRDF = texture2D(uLUT, vec2(NoV, 1.0 - uRough)).rg;   // scale, bias
+      vec2 envBRDF = texture2D(uLUT, vec2(NoV, 1.0 - rough)).rg;   // scale, bias
       vec3 spec = prefilteredColor * (uF0 * envBRDF.x + envBRDF.y);
 
       gl_FragColor = vec4(gammaEnc(spec), 1.0);
