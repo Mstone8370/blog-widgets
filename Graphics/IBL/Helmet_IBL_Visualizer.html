@@ -344,7 +344,10 @@ const helmetMat = new THREE.ShaderMaterial({
       // Specular IBL: prefiltered 밉 큐브 LOD 샘플 + LUT
       float lod = clamp(rough, 0.0, 1.0) * ${MAX_LOD.toFixed(1)};
       vec3 prefilteredColor = textureCubeLodEXT(uPrefiltered, cubeDir(R), lod).rgb;
-      vec2 envBRDF = texture2D(uLUT, vec2(NoV, rough)).rg;
+      // LUT 의 V 축은 뒤집혀 있다: three 의 EXRLoader 가 파일 행을 역순으로 쓰고
+      // (texture.flipY = false) 되돌리지 않아, GL 의 v = 1 - roughness 가 된다.
+      // (원본 리소스는 DirectX 기준, 여기선 오른손 좌표계/GL 텍스처 규약)
+      vec2 envBRDF = texture2D(uLUT, vec2(NoV, 1.0 - rough)).rg;
       vec3 spec = prefilteredColor * (F0 * envBRDF.x + envBRDF.y);
 
       gl_FragColor = vec4(gammaEnc(diffuse + spec + emissive), 1.0);
