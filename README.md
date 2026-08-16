@@ -38,6 +38,11 @@
 - [Full IBL](https://mstone8370.github.io/blog-widgets/Graphics/IBL/Full_IBL_Visualizer.html)
 - [Helmet IBL (FBX 모델)](https://mstone8370.github.io/blog-widgets/Graphics/IBL/Helmet_IBL_Visualizer.html)
 
+### 에너지 보존 (다중 산란 보상)
+> 화면을 가르는 바를 드래그해 보정 전/후를 좌우로 비교
+- [에너지 보존 (IBL)](https://mstone8370.github.io/blog-widgets/Graphics/EnergyConservation/Energy_Conservation_IBL_Visualizer.html)
+- [에너지 보존 (직접광)](https://mstone8370.github.io/blog-widgets/Graphics/EnergyConservation/Energy_Conservation_Direct_Visualizer.html)
+
 ### 실험 · 스케치
 > 정식 글에 임베드하지 않은 개인용 스케치
 - [하프벡터 기하 (H = L+V)](https://mstone8370.github.io/blog-widgets/Graphics/PBR/Half_Vector_Visualizer.html)

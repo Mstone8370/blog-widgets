@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/sunn-us/SUIT/fonts/static/woff2/SUIT.css');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap');
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #fdfdfd;
+  }
+
+  .ecs-vis {
+    font-family: 'SUIT', sans-serif;
+    width: 100%;
+    height: 100%;
+    background: #fdfdfd;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .ecs-vis .canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .ecs-vis canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    background: #404040;
+    touch-action: none;
+  }
+  .ecs-vis canvas:active { cursor: grabbing; }
+
+  /* 좌/우 라벨 (화면 모서리 고정) */
+  .ecs-vis .ecs-tag {
+    position: absolute;
+    top: 8px;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #fff;
+    background: rgba(20, 20, 24, 0.5);
+    border-radius: 4px;
+    padding: 4px 8px;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .ecs-vis .ecs-tag-l { left: 8px; }
+  .ecs-vis .ecs-tag-r { right: 8px; }
+
+  /* 드래그 가능한 세로 분할 바 */
+  .ecs-vis .ecs-split {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 30px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: ew-resize;
+    touch-action: none;
+    z-index: 2;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .ecs-vis .ecs-split-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+  }
+  .ecs-vis .ecs-split-knob {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #fff;
+    border: 1px solid #c8c8cc;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #2052BB;
+    font-size: 15px;
+    line-height: 1;
+  }
+
+  .ecs-vis .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex-shrink: 0;
+    padding: 2px;
+  }
+  .ecs-vis .sliders {
+    display: grid;
+    grid-template-columns: 88px 1fr 64px;
+    align-items: center;
+    gap: 12px 12px;
+  }
+  .ecs-vis .label { font-size: 15px; color: #444; }
+  .ecs-vis .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: #2052BB;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .ecs-vis input[type=color] {
+    width: 100%;
+    height: 22px;
+    padding: 0;
+    border: 1px solid #d4d4d8;
+    border-radius: 4px;
+    background: none;
+    cursor: pointer;
+  }
+  .ecs-vis input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 3px;
+    background: #d4d4d8;
+    border-radius: 2px;
+    outline: none;
+    margin: 0;
+    touch-action: pan-y;
+  }
+  .ecs-vis input[type=range]::-webkit-slider-thumb,
+  .ecs-vis input[type=range]::-moz-range-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #2052BB;
+    cursor: pointer;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    touch-action: none;
+  }
+  .ecs-vis .seg {
+    display: flex;
+    gap: 6px;
+  }
+  .ecs-vis .seg button {
+    flex: 1;
+    font-family: 'SUIT', sans-serif;
+    font-size: 15px;
+    padding: 6px 0;
+    border: 1px solid #ccc;
+    background: #f4f4f4;
+    color: #555;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .ecs-vis .seg button.active {
+    background: #2052BB;
+    color: #fff;
+    border-color: #2052BB;
+  }
+</style>
+</head>
+<body>
+
+<div class="ecs-vis">
+  <div class="canvas-wrap">
+    <canvas id="ecsCanvas"></canvas>
+    <div class="ecs-tag ecs-tag-l">보정 전</div>
+    <div class="ecs-tag ecs-tag-r">보정 후</div>
+    <div class="ecs-split" id="ecsSplit">
+      <div class="ecs-split-line"></div>
+      <div class="ecs-split-knob">↔</div>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="sliders">
+      <div class="label">Base Color</div>
+      <input type="color" id="bcPicker" value="#ffffff">
+      <div class="value" id="bcVal">#FFFFFF</div>
+
+      <div class="label">Metallic</div>
+      <input type="range" id="mSlider" min="0" max="100" value="100">
+      <div class="value" id="mVal">1.00</div>
+
+      <div class="label">Roughness</div>
+      <input type="range" id="rSlider" min="0" max="100" value="100">
+      <div class="value" id="rVal">1.00</div>
+    </div>
+    <div class="seg">
+      <button data-mode="hdri" class="active">HDRI</button>
+      <button data-mode="furnace">Furnace Test</button>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+/*
+ * 에너지 보존(다중 산란 보상) 비교 시각화 — 구체.
+ * 화면을 세로로 가르는 바를 드래그해 좌(보정 전)/우(보정 후)를 나란히 비교한다.
+ *   - 보정 전 : 단일 산란(single-scatter) split-sum. spec = prefiltered * (F0*A + B).
+ *   - 보정 후 : [Turquin 2018] 다중 산란 보상. E_Target = FssEss + FmsEms 로 잃은
+ *              에너지를 스페큘러에 되돌리고 kD = Albedo*(1 - E_Target) 로 디퓨즈를 깎는다.
+ *   두 결과 모두 fragment 에서 계산하고 gl_FragCoord.x 가 분할선 왼/오른쪽인지로 택1.
+ *
+ * 두 가지 환경 모드(세그먼트 버튼):
+ *   - HDRI    : 실제 환경맵(irradiance 큐브 + prefiltered 큐브 + BRDF LUT). Full_IBL 과 동일 자산.
+ *   - Furnace : 균일한 회색 환경(radiance 0.5). 배경·irradiance·prefiltered 를 모두 0.5 로.
+ *              에너지를 보존하면 구가 배경(0.5)에 녹아 사라지고, 잃으면 그만큼 어두워진다.
+ *
+ * 좌표계/디코딩은 Full_IBL 위젯과 동일: 씬은 Unreal(X앞,Y오른,Z위), cubeDir(v)=(v.x,-v.y,v.z),
+ * HDR 큐브맵은 선형값 → 최종 감마 2.2 인코딩. BaseColor 는 컬러피커 값을 선형 albedo 로 사용.
+ * BRDF LUT(A=scale,B=bias)는 환경과 무관한 방향성 반사율이므로 furnace 모드에서도 그대로 쓴다.
+ */
+import * as THREE from 'three';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+
+const PI = Math.PI;
+const GAMMA = 2.2;
+const MAX_LOD = 9.0;          // EnvPrefilterMaxLod(10) - 1
+const FURNACE = 0.5;          // furnace test radiance
+const MIN_ROUGHNESS = 0.015;  // 원본 CommonMeshPixelShader.hlsl: max(Roughness, 0.015)
+const BASE_FOV = 40 * PI / 180;
+const CAM_DIST = 4.2;
+const GRID_C   = 0xe3e3e6;
+const GRID_MID = 0xd0d0d4;
+const AXIS_C   = 0x8a93a6;
+
+const canvas = document.getElementById('ecsCanvas');
+const wrap = canvas.parentElement;
+const splitEl = document.getElementById('ecsSplit');
+const bcPicker = document.getElementById('bcPicker');
+const mSlider = document.getElementById('mSlider');
+const rSlider = document.getElementById('rSlider');
+const bcValEl = document.getElementById('bcVal');
+const mValEl = document.getElementById('mVal');
+const rValEl = document.getElementById('rVal');
+const segBtns = document.querySelectorAll('.seg button');
+
+// ---- renderer / scene / camera ----
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setClearColor(0x404040, 1);
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
+camera.up.set(0, 0, 1);   // Z-up (Unreal)
+
+const rgbeLoader = new RGBELoader().setDataType(THREE.HalfFloatType);
+const FACE_NAMES = ['Xp', 'Xm', 'Yp', 'Ym', 'Zp', 'Zm'];
+
+function makeCube(texs) {
+  const cube = new THREE.CubeTexture(texs);
+  cube.type = THREE.HalfFloatType;
+  cube.format = THREE.RGBAFormat;
+  cube.colorSpace = THREE.LinearSRGBColorSpace;
+  cube.minFilter = THREE.LinearFilter;
+  cube.magFilter = THREE.LinearFilter;
+  cube.generateMipmaps = false;
+  cube.needsUpdate = true;
+  return cube;
+}
+
+// ---- 디퓨즈: irradiance 큐브맵 (E/π, 1레벨) ----
+Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync('../IBL/DiffuseIBL/Irradiance/' + f + '_0.hdr')))
+  .then((texs) => { sphereMat.uniforms.uIrradiance.value = makeCube(texs); render(); })
+  .catch((err) => console.error('irradiance load failed:', err));
+
+// ---- 스페큘러: prefiltered 10밉 → '밉맵 1개 큐브'로 조립 (샘플러 10→1) ----
+Promise.all(
+  Array.from({ length: 10 }, (_, m) =>
+    Promise.all(FACE_NAMES.map(f => rgbeLoader.loadAsync(`../IBL/SpecularIBL/Prefiltered/${f}_${m}.hdr`)))
+  )
+).then((levels) => {
+  const cube = new THREE.CubeTexture(levels[0]);
+  cube.mipmaps = levels.slice(1).map(faces => ({ image: faces }));
+  cube.type = THREE.HalfFloatType;
+  cube.format = THREE.RGBAFormat;
+  cube.colorSpace = THREE.LinearSRGBColorSpace;
+  cube.minFilter = THREE.LinearMipmapLinearFilter;
+  cube.magFilter = THREE.LinearFilter;
+  cube.generateMipmaps = false;
+  cube.needsUpdate = true;
+  sphereMat.uniforms.uPrefiltered.value = cube;
+  render();
+}).catch((err) => console.error('prefiltered load failed:', err));
+
+// ---- environment BRDF LUT (2D, R=scale G=bias, 선형 데이터) ----
+const lutTex = new EXRLoader().setDataType(THREE.HalfFloatType)
+  .load('../IBL/SpecularIBL/EnvironmentBRDF.exr', () => render());
+lutTex.colorSpace = THREE.LinearSRGBColorSpace;
+lutTex.minFilter = THREE.LinearFilter;
+lutTex.magFilter = THREE.LinearFilter;
+lutTex.wrapS = THREE.ClampToEdgeWrapping;
+lutTex.wrapT = THREE.ClampToEdgeWrapping;
+lutTex.generateMipmaps = false;
+
+const CUBE_GLSL = `
+  vec3 cubeDir(vec3 v) { return vec3(v.x, -v.y, v.z); }
+  vec3 gammaEnc(vec3 c) { return pow(max(c, 0.0), vec3(1.0 / ${GAMMA.toFixed(4)})); }
+`;
+
+// ---- 배경 스카이박스 (HDRI: 원본 환경맵 gamma PNG / Furnace: 균일 0.5) ----
+const envTex = new THREE.CubeTextureLoader()
+  .setPath('../IBL/DiffuseIBL/Cubemap/')
+  .load(['Xp.png', 'Xm.png', 'Yp.png', 'Ym.png', 'Zp.png', 'Zm.png'], () => render());
+envTex.colorSpace = THREE.LinearSRGBColorSpace;
+envTex.flipY = false;
+
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uEnv: { value: envTex },
+    uFurnace: { value: 0 },
+    uFurnaceColor: { value: new THREE.Vector3(FURNACE, FURNACE, FURNACE) },
+  },
+  side: THREE.BackSide,
+  depthWrite: false,
+  vertexShader: `
+    varying vec3 vWorldPos;
+    void main() {
+      vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+    uniform samplerCube uEnv;
+    uniform float uFurnace;
+    uniform vec3 uFurnaceColor;
+    varying vec3 vWorldPos;
+    ${CUBE_GLSL}
+    void main() {
+      if (uFurnace > 0.5) {
+        gl_FragColor = vec4(gammaEnc(uFurnaceColor), 1.0);   // 균일 회색(선형 0.5)
+        return;
+      }
+      vec3 d = normalize(vWorldPos - cameraPosition);
+      gl_FragColor = vec4(textureCube(uEnv, cubeDir(d)).rgb, 1.0);   // gamma PNG = raw 출력
+    }
+  `,
+});
+const sky = new THREE.Mesh(new THREE.BoxGeometry(200, 200, 200), skyMat);
+sky.frustumCulled = false;
+sky.renderOrder = -1;
+scene.add(sky);
+
+// ---- 구체 머티리얼 (보정 전/후를 fragment 에서 동시 계산 후 분할선 기준 택1) ----
+const sphereUniforms = {
+  uIrradiance: { value: null },
+  uLUT: { value: lutTex },
+  uBaseColor: { value: new THREE.Color(1.0, 1.0, 1.0) },
+  uMetallic: { value: 1.0 },
+  uRough: { value: 1.0 },
+  uPrefiltered: { value: null },
+  uSplit: { value: 0.5 },
+  uResolution: { value: new THREE.Vector2(1, 1) },
+  uFurnace: { value: 0 },
+  uFurnaceColor: { value: new THREE.Vector3(FURNACE, FURNACE, FURNACE) },
+};
+
+const sphereMat = new THREE.ShaderMaterial({
+  uniforms: sphereUniforms,
+  extensions: { shaderTextureLOD: true },
+  vertexShader: `
+    varying vec3 vN;
+    varying vec3 vWorldPos;
+    void main() {
+      vN = normalize(mat3(modelMatrix) * normal);
+      vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+    uniform samplerCube uPrefiltered;
+    uniform samplerCube uIrradiance;
+    uniform sampler2D uLUT;
+    uniform vec3 uBaseColor;
+    uniform float uMetallic;
+    uniform float uRough;
+    uniform float uSplit;
+    uniform vec2 uResolution;
+    uniform float uFurnace;
+    uniform vec3 uFurnaceColor;
+    varying vec3 vN;
+    varying vec3 vWorldPos;
+    ${CUBE_GLSL}
+
+    // [Turquin 2018] 다중 산란 보상 IBL. 순수 유전체/순수 금속을 각각 계산해
+    // metallic 으로 lerp 한다(F0 에 비선형이라 lerp 된 F0 를 넣으면 안 됨).
+    vec3 energyIBL(vec3 F0, vec3 albedo, vec3 pref, vec3 irr, float A, float B) {
+      vec3 FssEss   = F0 * A + B;
+      float Ess     = A + B;
+      float Ems     = 1.0 - Ess;
+      vec3 Favg     = F0 + (1.0 - F0) * (1.0 / 21.0);
+      vec3 FmsEms   = Ems * FssEss * Favg / (1.0 - Favg * Ems);
+      vec3 E_Target = FssEss + FmsEms;
+      vec3 kD       = albedo * (1.0 - E_Target);
+      return kD * irr + E_Target * pref;
+    }
+
+    void main() {
+      vec3 N = normalize(vN);
+      vec3 V = normalize(cameraPosition - vWorldPos);
+      vec3 R = reflect(-V, N);
+      float NoV = max(dot(N, V), 0.0);
+
+      // 원본은 조명에 넘기기 전에 roughness 를 클램프한다
+      // (CommonMeshPixelShader.hlsl: RoughnessClamped = max(Roughness, 0.015))
+      float rough = max(uRough, ${MIN_ROUGHNESS});
+
+      vec2 envBRDF = texture2D(uLUT, vec2(NoV, 1.0 - rough)).rg;   // A=scale, B=bias
+      float A = envBRDF.x, B = envBRDF.y;
+
+      vec3 irr, pref;
+      if (uFurnace > 0.5) {
+        irr = uFurnaceColor;
+        pref = uFurnaceColor;
+      } else {
+        irr = textureCube(uIrradiance, cubeDir(N)).rgb;
+        float lod = clamp(rough, 0.0, 1.0) * ${MAX_LOD.toFixed(1)};
+        pref = textureCubeLodEXT(uPrefiltered, cubeDir(R), lod).rgb;
+      }
+
+      // 보정 전: 단일 산란 split-sum (metallic 으로 F0/DiffuseColor 를 직접 lerp)
+      vec3 diffuseColor = uBaseColor * (1.0 - uMetallic);
+      vec3 F0 = mix(vec3(0.04), uBaseColor, uMetallic);
+      vec3 before = irr * diffuseColor + pref * (F0 * A + B);
+
+      // 보정 후: 순수 유전체/순수 금속 각각 보정 후 metallic 으로 lerp (원본 프로젝트와 동일)
+      vec3 dielectric = energyIBL(vec3(0.04), uBaseColor, pref, irr, A, B);
+      vec3 metal      = energyIBL(uBaseColor, vec3(0.0), pref, irr, A, B);
+      vec3 after      = mix(dielectric, metal, uMetallic);
+
+      float sx = gl_FragCoord.x / uResolution.x;
+      vec3 lit = (sx < uSplit) ? before : after;
+
+      gl_FragColor = vec4(gammaEnc(lit), 1.0);
+    }
+  `,
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), sphereMat));
+
+// ---- 바닥 격자 + z축 선 ----
+const grid = new THREE.GridHelper(4, 8, GRID_MID, GRID_C);
+grid.rotation.x = PI / 2;
+scene.add(grid);
+scene.add(new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1.5),
+  ]),
+  new THREE.LineBasicMaterial({ color: AXIS_C })
+));
+
+// ---- 카메라 (구면 좌표) ----
+let orbitAz = 0.6;
+let orbitEl = 0.35;
+const EL_MAX = 1.45, EL_MIN = -1.45;
+function updateCamera() {
+  const ce = Math.cos(orbitEl), se = Math.sin(orbitEl);
+  camera.position.set(
+    CAM_DIST * ce * Math.cos(orbitAz),
+    CAM_DIST * ce * Math.sin(orbitAz),
+    CAM_DIST * se
+  );
+  camera.lookAt(0, 0, 0);
+}
+
+function render() {
+  updateCamera();
+  renderer.render(scene, camera);
+}
+
+// ---- 분할 바 드래그 ----
+let split = 0.5;
+function applySplit() {
+  splitEl.style.left = (split * 100) + '%';
+  sphereUniforms.uSplit.value = split;
+  render();
+}
+function splitFromClientX(cx) {
+  const r = wrap.getBoundingClientRect();
+  return Math.max(0.06, Math.min(0.94, (cx - r.left) / r.width));
+}
+let splitDragging = false;
+splitEl.addEventListener('pointerdown', (e) => {
+  e.stopPropagation();
+  splitDragging = true;
+  splitEl.setPointerCapture(e.pointerId);
+});
+splitEl.addEventListener('pointermove', (e) => {
+  if (!splitDragging) return;
+  e.stopPropagation();
+  split = splitFromClientX(e.clientX);
+  applySplit();
+});
+function endSplit(e) {
+  if (!splitDragging) return;
+  splitDragging = false;
+  e.stopPropagation();
+}
+splitEl.addEventListener('pointerup', endSplit);
+splitEl.addEventListener('pointercancel', endSplit);
+
+// ---- 컨트롤 ----
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+bcPicker.addEventListener('input', () => {
+  const [r, g, b] = hexToRgb(bcPicker.value);
+  sphereUniforms.uBaseColor.value.setRGB(r, g, b);
+  bcValEl.textContent = bcPicker.value.toUpperCase();
+  render();
+});
+mSlider.addEventListener('input', () => {
+  const v = +mSlider.value / 100;
+  sphereUniforms.uMetallic.value = v;
+  mValEl.textContent = v.toFixed(2);
+  render();
+});
+rSlider.addEventListener('input', () => {
+  const r = +rSlider.value / 100;
+  sphereUniforms.uRough.value = r;
+  rValEl.textContent = r.toFixed(2);
+  render();
+});
+segBtns.forEach((b) => b.addEventListener('click', () => {
+  segBtns.forEach((x) => x.classList.remove('active'));
+  b.classList.add('active');
+  const furnace = b.dataset.mode === 'furnace' ? 1 : 0;
+  sphereUniforms.uFurnace.value = furnace;
+  skyMat.uniforms.uFurnace.value = furnace;
+  render();
+}));
+
+// ---- 적응형 FOV resize ----
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(w, h, false);
+  sphereUniforms.uResolution.value.set(
+    renderer.domElement.width, renderer.domElement.height);
+  const aspect = w / h;
+  camera.aspect = aspect;
+  const vfov = aspect >= 1 ? BASE_FOV : 2 * Math.atan(Math.tan(BASE_FOV / 2) / aspect);
+  camera.fov = vfov * 180 / PI;
+  camera.updateProjectionMatrix();
+  render();
+}
+
+// ---- 상시 rAF 루프: 드래그 / 2축 관성 (좌우 비교에 방해되어 자동회전은 없음) ----
+const DAMP      = 10;
+const VEL_MIN   = 0.15;
+
+let dragging = false, prevX = 0, prevY = 0, lastMoveT = 0;
+let vAz = 0, vEl = 0;
+let prevT = performance.now();
+
+function tick(now) {
+  const dt = Math.min((now - prevT) / 1000, 0.1);
+  prevT = now;
+  if (!dragging && (Math.abs(vAz) > VEL_MIN || Math.abs(vEl) > VEL_MIN)) {
+    orbitAz += vAz * dt;
+    const newEl = orbitEl + vEl * dt;
+    if (newEl <= EL_MIN)      { orbitEl = EL_MIN; vEl = 0; }
+    else if (newEl >= EL_MAX) { orbitEl = EL_MAX; vEl = 0; }
+    else                      { orbitEl = newEl; }
+    vAz *= Math.exp(-dt * DAMP);
+    vEl *= Math.exp(-dt * DAMP);
+    if (Math.abs(vAz) <= VEL_MIN) vAz = 0;
+    if (Math.abs(vEl) <= VEL_MIN) vEl = 0;
+    render();
+  }
+  requestAnimationFrame(tick);
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  vAz = 0; vEl = 0;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = performance.now();
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const mt = performance.now();
+  const dtMove = Math.max((mt - lastMoveT) / 1000, 1e-3);
+  const dAz = -(e.clientX - prevX) * 0.008;
+  const newEl = orbitEl + (e.clientY - prevY) * 0.008;
+  const clampedEl = Math.max(EL_MIN, Math.min(EL_MAX, newEl));
+  const dEl = clampedEl - orbitEl;
+  orbitAz += dAz;
+  orbitEl = clampedEl;
+  vAz = dAz / dtMove;
+  vEl = dEl / dtMove;
+  prevX = e.clientX; prevY = e.clientY;
+  lastMoveT = mt;
+  render();
+});
+const endDrag = () => {
+  if (!dragging) return;
+  dragging = false;
+  if (performance.now() - lastMoveT > 100) { vAz = 0; vEl = 0; }
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointerleave', endDrag);
+
+window.addEventListener('resize', resize);
+if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
+
+// ---- init ----
+applySplit();
+resize();
+requestAnimationFrame(tick);
+</script>
+
+</body>
+</html>
